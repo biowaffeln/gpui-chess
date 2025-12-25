@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Do not run `cargo run` to run the project. Assume that the project is being run by the user with a watcher.
