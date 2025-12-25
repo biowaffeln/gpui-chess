@@ -1,15 +1,16 @@
 use gpui::{
     App, Application, AssetSource, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Rgba, SharedString, Window, WindowBounds, WindowOptions, div, img, prelude::*,
-    px, rgb, size,
+    MouseUpEvent, Pixels, Rgba, SharedString, Size, Window, WindowBounds, WindowOptions, canvas,
+    div, img, prelude::*, px, rgb, size,
 };
+use gpui_component::Root;
+use gpui_component::resizable::{h_resizable, resizable_panel};
+use shakmaty::san::San;
 use shakmaty::{Chess, Color as SColor, File, Move, Position, Rank, Role, Square};
 use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
 
-const SQUARE_SIZE: f32 = 60.0;
-const BOARD_SIZE: f32 = SQUARE_SIZE * 8.0;
 const BOARD_PADDING: f32 = 20.0;
 const PIECE_SCALE: f32 = 0.98; // piece size relative to square
 const GHOST_OPACITY: f32 = 0.4;
@@ -136,9 +137,15 @@ fn shakmaty_to_piece(piece: shakmaty::Piece) -> Piece {
     Piece { kind, color }
 }
 
+// initial panel sizes
+const INITIAL_LEFT_PANEL: f32 = 540.0;
+const INITIAL_RIGHT_PANEL: f32 = 280.0;
+
 struct ChessBoard {
     position: Chess,
     drag_state: Option<DragState>,
+    move_history: Vec<String>,
+    panel_size: Size<Pixels>, // measured from canvas
 }
 
 impl ChessBoard {
@@ -146,12 +153,30 @@ impl ChessBoard {
         Self {
             position: Chess::default(),
             drag_state: None,
+            move_history: Vec::new(),
+            panel_size: Size {
+                width: px(INITIAL_LEFT_PANEL),
+                height: px(600.0),
+            },
         }
     }
 
-    // convert window position to board row/col (if within board)
+    /// Calculate square size from measured panel dimensions
+    fn square_size(&self) -> f32 {
+        let panel_width: f32 = self.panel_size.width.into();
+        let panel_height: f32 = self.panel_size.height.into();
+        let available_width = panel_width - BOARD_PADDING * 2.0;
+        let available_height = panel_height - BOARD_PADDING * 2.0;
+        (available_width.min(available_height) / 8.0).max(30.0)
+    }
+
+    fn piece_size(&self) -> f32 {
+        self.square_size() * PIECE_SCALE
+    }
+
+    /// Convert position relative to board panel to board row/col (if within board)
     fn pos_to_square(&self, x: f32, y: f32) -> Option<(usize, usize)> {
-        // board starts at (BOARD_PADDING, BOARD_PADDING)
+        // board starts at (BOARD_PADDING, BOARD_PADDING) within the panel
         let board_x = x - BOARD_PADDING;
         let board_y = y - BOARD_PADDING;
 
@@ -159,8 +184,9 @@ impl ChessBoard {
             return None;
         }
 
-        let col = (board_x / SQUARE_SIZE) as usize;
-        let row = (board_y / SQUARE_SIZE) as usize;
+        let square_size = self.square_size();
+        let col = (board_x / square_size) as usize;
+        let row = (board_y / square_size) as usize;
 
         if row < 8 && col < 8 {
             Some((row, col))
@@ -215,6 +241,10 @@ impl ChessBoard {
                     _ => m.clone(),
                 };
 
+                // record move in standard notation
+                let san = San::from_move(&self.position, move_to_play.clone());
+                self.move_history.push(san.to_string());
+
                 self.position = self.position.clone().play(move_to_play).unwrap();
                 return true;
             }
@@ -228,14 +258,6 @@ impl ChessBoard {
             SColor::Black => PieceColor::Black,
         }
     }
-
-    fn is_checkmate(&self) -> bool {
-        self.position.is_checkmate()
-    }
-
-    fn is_stalemate(&self) -> bool {
-        self.position.is_stalemate()
-    }
 }
 
 fn square_color(row: usize, col: usize) -> Rgba {
@@ -246,17 +268,13 @@ fn square_color(row: usize, col: usize) -> Rgba {
     }
 }
 
-fn piece_size() -> f32 {
-    SQUARE_SIZE * PIECE_SCALE
-}
-
-fn render_piece(piece: Piece) -> impl IntoElement {
+fn render_piece(piece: Piece, piece_size: f32) -> impl IntoElement {
     div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .child(img(piece.svg_path()).size(px(piece_size())))
+        .child(img(piece.svg_path()).size(px(piece_size)))
 }
 
 fn render_square(
@@ -264,9 +282,12 @@ fn render_square(
     col: usize,
     piece: Option<Piece>,
     is_being_dragged: bool,
+    square_size: f32,
+    piece_size: f32,
 ) -> impl IntoElement {
     div()
-        .size(px(SQUARE_SIZE))
+        .flex_shrink_0() // never shrink - maintain aspect ratio
+        .size(px(square_size))
         .bg(square_color(row, col))
         .flex()
         .items_center()
@@ -281,10 +302,10 @@ fn render_square(
                         .items_center()
                         .justify_center()
                         .opacity(GHOST_OPACITY)
-                        .child(img(p.svg_path()).size(px(piece_size()))),
+                        .child(img(p.svg_path()).size(px(piece_size))),
                 )
             } else {
-                el.child(render_piece(p))
+                el.child(render_piece(p, piece_size))
             }
         })
 }
@@ -294,67 +315,89 @@ impl Render for ChessBoard {
         let entity = cx.entity().clone();
         let entity_down = entity.clone();
         let entity_move = entity.clone();
-        let entity_up = entity;
+        let entity_up = entity.clone();
+        let entity_measure = entity;
         let drag_state = self.drag_state;
         let dragging_from = drag_state.map(|d| (d.from_row, d.from_col));
 
+        // sizing based on measured panel dimensions
+        let square_size = self.square_size();
+        let piece_size = self.piece_size();
+
+        // prepare move pairs for display
+        let move_pairs: Vec<(usize, String, Option<String>)> = self
+            .move_history
+            .chunks(2)
+            .enumerate()
+            .map(|(i, chunk)| {
+                let move_num = i + 1;
+                let white_move = chunk.get(0).cloned().unwrap_or_default();
+                let black_move = chunk.get(1).cloned();
+                (move_num, white_move, black_move)
+            })
+            .collect();
+
         // floating piece follows cursor during drag
         let floating_piece = drag_state.map(|d| {
-            let size = piece_size();
             div()
                 .absolute()
-                .left(px(d.mouse_x - size / 2.0))
-                .top(px(d.mouse_y - size / 2.0))
-                .size(px(size))
-                .child(img(d.piece.svg_path()).size(px(size)))
+                .left(px(d.mouse_x - piece_size / 2.0))
+                .top(px(d.mouse_y - piece_size / 2.0))
+                .size(px(piece_size))
+                .child(img(d.piece.svg_path()).size(px(piece_size)))
         });
 
-        div()
-            .id("chess-window")
-            .relative()
+        // board element with fixed size - always maintains 1:1 aspect ratio
+        // board_size = 8 squares, never shrinks
+        let board_total_size = square_size * 8.0;
+        let board = div()
+            .flex_shrink_0() // never shrink
             .flex()
             .flex_col()
+            .w(px(board_total_size))
+            .h(px(board_total_size))
+            .overflow_hidden()
+            .rounded_md()
+            .children((0..8).map(|row| {
+                div().flex().flex_shrink_0().children((0..8).map(|col| {
+                    let piece = self.piece_at(row, col);
+                    let is_being_dragged = dragging_from == Some((row, col));
+                    render_square(row, col, piece, is_being_dragged, square_size, piece_size)
+                }))
+            }));
+
+        let board_panel_content = div()
+            .id("board-panel")
+            .relative()
+            .size_full()
+            .overflow_hidden()
             .bg(rgb(0x2a2a2a))
-            .w_full()
-            .h_full()
-            .min_w(px(BOARD_SIZE + 44.0))
             .p(px(BOARD_PADDING))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .shadow_xl()
-                    .border_2()
-                    .border_color(rgb(0x4a4a4a))
-                    .children((0..8).map(|row| {
-                        div().flex().children((0..8).map(|col| {
-                            let piece = self.piece_at(row, col);
-                            let is_being_dragged = dragging_from == Some((row, col));
-                            render_square(row, col, piece, is_being_dragged)
-                        }))
-                    })),
-            )
+            .child(board)
             .when_some(floating_piece, |el, fp| el.child(fp))
             // mouse down: start drag if clicking on a piece
-            .on_mouse_down(MouseButton::Left, move |ev: &MouseDownEvent, _, cx| {
-                entity_down.update(cx, |board, cx| {
-                    let pos = ev.position;
-                    if let Some((row, col)) = board.pos_to_square(pos.x.into(), pos.y.into()) {
-                        if let Some(piece) = board.piece_at(row, col) {
-                            if piece.color == board.current_turn() {
-                                board.drag_state = Some(DragState {
-                                    piece,
-                                    from_row: row,
-                                    from_col: col,
-                                    mouse_x: pos.x.into(),
-                                    mouse_y: pos.y.into(),
-                                });
-                                cx.notify();
+            .on_mouse_down(
+                MouseButton::Left,
+                move |ev: &MouseDownEvent, _window, cx| {
+                    entity_down.update(cx, |board, cx| {
+                        let pos = ev.position;
+                        if let Some((row, col)) = board.pos_to_square(pos.x.into(), pos.y.into()) {
+                            if let Some(piece) = board.piece_at(row, col) {
+                                if piece.color == board.current_turn() {
+                                    board.drag_state = Some(DragState {
+                                        piece,
+                                        from_row: row,
+                                        from_col: col,
+                                        mouse_x: pos.x.into(),
+                                        mouse_y: pos.y.into(),
+                                    });
+                                    cx.notify();
+                                }
                             }
                         }
-                    }
-                });
-            })
+                    });
+                },
+            )
             // mouse move: update drag position
             .on_mouse_move(move |ev: &MouseMoveEvent, _, cx| {
                 entity_move.update(cx, |board, cx| {
@@ -366,7 +409,7 @@ impl Render for ChessBoard {
                 });
             })
             // mouse up: complete the move
-            .on_mouse_up(MouseButton::Left, move |ev: &MouseUpEvent, _, cx| {
+            .on_mouse_up(MouseButton::Left, move |ev: &MouseUpEvent, _window, cx| {
                 entity_up.update(cx, |board, cx| {
                     if let Some(drag) = board.drag_state.take() {
                         let pos = ev.position;
@@ -378,7 +421,128 @@ impl Render for ChessBoard {
                         cx.notify();
                     }
                 });
-            })
+            });
+
+        // move list panel content
+        let move_list =
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(rgb(0x1e1e1e))
+                .border_1()
+                .border_color(rgb(0x4a4a4a))
+                .rounded_md()
+                // header (fixed)
+                .child(
+                    div()
+                        .p_4()
+                        .pb_2()
+                        .text_color(rgb(0xffffff))
+                        .text_sm()
+                        .border_b_1()
+                        .border_color(rgb(0x4a4a4a))
+                        .child("Move History"),
+                )
+                // scrollable moves content
+                .child(
+                    div()
+                        .id("move-list-scroll")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .p_4()
+                        .pt_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(move_pairs.is_empty(), |el| {
+                            el.child(
+                                div()
+                                    .text_color(rgb(0x888888))
+                                    .text_sm()
+                                    .child("No moves yet"),
+                            )
+                        })
+                        .children(move_pairs.into_iter().map(
+                            |(move_num, white_move, black_move)| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .py_1()
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0x888888))
+                                            .text_sm()
+                                            .w(px(40.0))
+                                            .child(format!("{}.", move_num)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0xffffff))
+                                            .text_sm()
+                                            .flex_1()
+                                            .child(white_move),
+                                    )
+                                    .when_some(black_move, |el, bm| {
+                                        el.child(
+                                            div()
+                                                .text_color(rgb(0xffffff))
+                                                .text_sm()
+                                                .flex_1()
+                                                .child(bm),
+                                        )
+                                    })
+                            },
+                        )),
+                );
+
+        let move_list_panel_content = div()
+            .size_full()
+            .bg(rgb(0x2a2a2a))
+            .p(px(BOARD_PADDING))
+            .child(move_list);
+
+        // canvas to measure actual panel size - absolutely positioned so it doesn't affect layout
+        let measure_canvas = canvas(
+            move |bounds, _window, cx| {
+                entity_measure.update(cx, |board, cx| {
+                    if board.panel_size != bounds.size {
+                        board.panel_size = bounds.size;
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+        // wrap board panel content with measuring canvas (canvas is absolute, doesn't affect layout)
+        let board_panel_with_measure = div()
+            .relative()
+            .size_full()
+            .child(measure_canvas)
+            .child(board_panel_content);
+
+        // main resizable layout
+        div().size_full().child(
+            h_resizable("chess-layout")
+                .child(
+                    resizable_panel()
+                        .size(px(INITIAL_LEFT_PANEL))
+                        .size_range(px(320.)..px(1200.))
+                        .child(board_panel_with_measure),
+                )
+                .child(
+                    resizable_panel()
+                        .size(px(INITIAL_RIGHT_PANEL))
+                        .size_range(px(150.)..Pixels::MAX)
+                        .child(move_list_panel_content),
+                ),
+        )
     }
 }
 
@@ -386,14 +550,18 @@ fn main() {
     Application::new()
         .with_assets(FileAssets::new())
         .run(|cx: &mut App| {
-            let window_size = BOARD_SIZE + 40.0;
-            let bounds = Bounds::centered(None, size(px(window_size), px(window_size)), cx);
+            gpui_component::init(cx);
+
+            let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|_| ChessBoard::new()),
+                |window, cx| {
+                    let view = cx.new(|_| ChessBoard::new());
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
             )
             .unwrap();
         });
