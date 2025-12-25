@@ -1,9 +1,10 @@
 //! Game state model - the application layer for chess game state.
 
-use crate::domain::{Piece, PieceColor, shakmaty_to_piece, to_square};
+use crate::domain::{MoveNodeId, MoveTree, Piece, PieceColor, shakmaty_to_piece, to_square};
 use gpui::{Pixels, Size, px};
 use shakmaty::san::San;
 use shakmaty::{Chess, Color as SColor, File, Move, Position, Rank, Role};
+use std::collections::HashSet;
 
 use crate::ui::theme::{BOARD_PADDING, INITIAL_LEFT_PANEL, PIECE_SCALE};
 
@@ -18,109 +19,80 @@ pub struct DragState {
     pub mouse_y: f32,
 }
 
-/// A recorded move with its SAN notation
-#[derive(Clone, Debug)]
-pub struct RecordedMove {
-    pub san: String,
-}
-
 /// The main game model containing all chess game state
 pub struct GameModel {
-    /// All positions in the game, starting with the initial position
-    positions: Vec<Chess>,
-    /// Index of the currently viewed position (0 = starting position)
-    viewing_index: usize,
-    /// Recorded moves (one less than positions.len())
-    moves: Vec<RecordedMove>,
+    /// The move tree containing all positions and variations
+    tree: MoveTree,
     /// Drag state for piece movement
     pub drag_state: Option<DragState>,
     /// Measured panel size from canvas
     pub panel_size: Size<Pixels>,
+    /// Node IDs whose variations are collapsed
+    pub collapsed_variations: HashSet<MoveNodeId>,
 }
 
 impl GameModel {
     pub fn new() -> Self {
         Self {
-            positions: vec![Chess::default()],
-            viewing_index: 0,
-            moves: Vec::new(),
+            tree: MoveTree::new(),
             drag_state: None,
             panel_size: Size {
                 width: px(INITIAL_LEFT_PANEL),
                 height: px(600.0),
             },
+            collapsed_variations: HashSet::new(),
         }
+    }
+
+    /// Get a reference to the move tree
+    #[allow(dead_code)]
+    pub fn tree(&self) -> &MoveTree {
+        &self.tree
     }
 
     /// Get the currently viewed position
     pub fn current_position(&self) -> &Chess {
-        &self.positions[self.viewing_index]
+        &self.tree.current().position
     }
 
-    /// Get the latest position (end of game)
-    pub fn latest_position(&self) -> &Chess {
-        self.positions.last().unwrap()
+    /// Get the current node ID
+    pub fn current_node_id(&self) -> MoveNodeId {
+        self.tree.current_id()
     }
 
-    /// Check if we're viewing the latest position
-    pub fn is_at_latest(&self) -> bool {
-        self.viewing_index == self.positions.len() - 1
+    /// Check if we're at a leaf node (can add new moves freely)
+    pub fn is_at_leaf(&self) -> bool {
+        self.tree.is_at_leaf()
     }
 
-    /// Check if we're at the starting position
-    pub fn is_at_start(&self) -> bool {
-        self.viewing_index == 0
+    /// Check if we're at the root (starting position)
+    pub fn is_at_root(&self) -> bool {
+        self.tree.is_at_root()
     }
 
-    /// Get the current viewing index
-    #[allow(dead_code)]
-    pub fn viewing_index(&self) -> usize {
-        self.viewing_index
-    }
-
-    /// Total number of half-moves played
-    #[allow(dead_code)]
-    pub fn move_count(&self) -> usize {
-        self.moves.len()
-    }
-
-    /// Navigate to a specific move index (0 = after first move, etc.)
-    /// Pass None to go to starting position
-    pub fn go_to_move(&mut self, move_index: Option<usize>) {
-        match move_index {
-            None => self.viewing_index = 0,
-            Some(idx) => {
-                // move_index 0 means after first move = position index 1
-                let position_index = idx + 1;
-                if position_index < self.positions.len() {
-                    self.viewing_index = position_index;
-                }
-            }
-        }
+    /// Navigate to a specific node by ID
+    pub fn go_to_node(&mut self, id: MoveNodeId) -> bool {
+        self.tree.go_to(id)
     }
 
     /// Go to the starting position
     pub fn go_to_start(&mut self) {
-        self.viewing_index = 0;
+        self.tree.go_to_root();
     }
 
-    /// Go to the latest position
+    /// Go to the end of the main line
     pub fn go_to_end(&mut self) {
-        self.viewing_index = self.positions.len() - 1;
+        self.tree.go_to_end();
     }
 
     /// Go back one move
     pub fn go_back(&mut self) {
-        if self.viewing_index > 0 {
-            self.viewing_index -= 1;
-        }
+        self.tree.go_back();
     }
 
-    /// Go forward one move
+    /// Go forward one move (main line)
     pub fn go_forward(&mut self) {
-        if self.viewing_index < self.positions.len() - 1 {
-            self.viewing_index += 1;
-        }
+        self.tree.go_forward();
     }
 
     /// Calculate square size from measured panel dimensions
@@ -165,15 +137,12 @@ impl GameModel {
             .map(shakmaty_to_piece)
     }
 
-    /// Try to make a move from one square to another. Returns true if legal.
-    /// Only works when viewing the latest position.
+    /// Try to make a move from one square to another. Returns true if successful.
+    ///
+    /// If the move already exists as a child of current node, navigates to it.
+    /// Otherwise, creates a new variation and navigates to it.
     pub fn try_move(&mut self, from: (usize, usize), to: (usize, usize)) -> bool {
-        // Can only make moves when viewing the latest position
-        if !self.is_at_latest() {
-            return false;
-        }
-
-        let position = self.latest_position().clone();
+        let position = self.current_position().clone();
         let from_sq = to_square(from.0, from.1);
         let to_sq = to_square(to.0, to.1);
 
@@ -212,16 +181,14 @@ impl GameModel {
                     _ => m.clone(),
                 };
 
-                // Record move in standard notation
-                let san = San::from_move(&position, move_to_play.clone());
-                self.moves.push(RecordedMove {
-                    san: san.to_string(),
-                });
+                // Get SAN notation
+                let san = San::from_move(&position, move_to_play.clone()).to_string();
 
-                // Apply the move and store new position
+                // Apply the move
                 let new_position = position.play(move_to_play).unwrap();
-                self.positions.push(new_position);
-                self.viewing_index = self.positions.len() - 1;
+
+                // Add to tree (will navigate to existing or create new)
+                self.tree.add_move(new_position, san);
 
                 return true;
             }
@@ -237,42 +204,242 @@ impl GameModel {
         }
     }
 
-    /// Get move pairs for display (move number, white move index, white san, optional black move index, optional black san)
-    /// The indices are the half-move indices (0-based)
-    pub fn move_pairs(&self) -> Vec<MoveDisplayPair> {
-        self.moves
-            .chunks(2)
-            .enumerate()
-            .map(|(i, chunk)| {
-                let move_num = i + 1;
-                let white_idx = i * 2;
-                let white_san = chunk.first().map(|m| m.san.clone()).unwrap_or_default();
-                let black = chunk.get(1).map(|m| (i * 2 + 1, m.san.clone()));
-                MoveDisplayPair {
-                    move_num,
-                    white_move_idx: white_idx,
-                    white_san,
-                    black_move: black,
-                }
-            })
-            .collect()
+    /// Check if a specific node is the currently viewed one
+    #[allow(dead_code)]
+    pub fn is_node_selected(&self, node_id: MoveNodeId) -> bool {
+        self.tree.current_id() == node_id
     }
 
-    /// Check if a specific half-move index is the currently viewed one
-    pub fn is_move_selected(&self, half_move_idx: usize) -> bool {
-        // half_move_idx 0 = first move = position index 1
-        self.viewing_index == half_move_idx + 1
+    /// Get the main line for display
+    /// Returns a list of moves with info about sibling variations (alternatives to this move)
+    pub fn main_line_display(&self) -> Vec<MainLineMoveDisplay> {
+        let main_line = self.tree.main_line();
+        let mut result = Vec::new();
+
+        for &node_id in &main_line {
+            if let Some(node) = self.tree.get(node_id) {
+                if let Some(san) = &node.san {
+                    let (move_num, is_black) = node.move_number(&self.tree);
+
+                    // Check if this move has sibling variations (other children of parent)
+                    let sibling_variations = if let Some(parent_id) = node.parent_id {
+                        if let Some(parent) = self.tree.get(parent_id) {
+                            // This move is on main line, so it's children[0]
+                            // Siblings are children[1..]
+                            parent.variation_children().len()
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
+
+                    // Check if this move gives check or checkmate
+                    let is_check = node.position.is_check();
+                    let is_checkmate = node.position.is_checkmate();
+
+                    result.push(MainLineMoveDisplay {
+                        node_id,
+                        move_num,
+                        is_black,
+                        san: san.clone(),
+                        has_sibling_variations: sibling_variations > 0,
+                        sibling_variation_count: sibling_variations,
+                        is_check,
+                        is_checkmate,
+                    });
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get sibling variations for a main line move
+    /// Returns the variation lines that are alternatives to this move
+    pub fn get_sibling_variations(&self, node_id: MoveNodeId) -> Vec<VariationDisplay> {
+        let Some(node) = self.tree.get(node_id) else {
+            return Vec::new();
+        };
+
+        let Some(parent_id) = node.parent_id else {
+            return Vec::new();
+        };
+
+        let Some(parent) = self.tree.get(parent_id) else {
+            return Vec::new();
+        };
+
+        // Get all children except the main line child (which is this node)
+        let variation_ids = parent.variation_children();
+        let mut variations = Vec::new();
+
+        for &var_start_id in variation_ids {
+            if let Some(var_node) = self.tree.get(var_start_id) {
+                let line = self.collect_variation_line(var_start_id);
+                let (move_num, is_black) = var_node.move_number(&self.tree);
+                variations.push(VariationDisplay {
+                    start_node_id: var_start_id,
+                    start_move_num: move_num,
+                    starts_with_black: is_black,
+                    moves: line,
+                });
+            }
+        }
+
+        variations
+    }
+
+    /// Get sibling sub-variations for a move within a variation line
+    /// These are the alternatives to this move (other children of parent)
+    pub fn get_sibling_sub_variations(&self, node_id: MoveNodeId) -> Vec<VariationDisplay> {
+        let Some(node) = self.tree.get(node_id) else {
+            return Vec::new();
+        };
+
+        let Some(parent_id) = node.parent_id else {
+            return Vec::new();
+        };
+
+        let Some(parent) = self.tree.get(parent_id) else {
+            return Vec::new();
+        };
+
+        // Get all children except the main line child (which is this node)
+        let variation_ids = parent.variation_children();
+        let mut variations = Vec::new();
+
+        for &var_start_id in variation_ids {
+            if let Some(var_node) = self.tree.get(var_start_id) {
+                let line = self.collect_variation_line(var_start_id);
+                let (move_num, is_black) = var_node.move_number(&self.tree);
+                variations.push(VariationDisplay {
+                    start_node_id: var_start_id,
+                    start_move_num: move_num,
+                    starts_with_black: is_black,
+                    moves: line,
+                });
+            }
+        }
+
+        variations
+    }
+
+    /// Collect moves in a variation line (following main line from start)
+    fn collect_variation_line(&self, start_id: MoveNodeId) -> Vec<VariationMoveDisplay> {
+        let mut moves = Vec::new();
+        let mut current_id = start_id;
+
+        loop {
+            if let Some(node) = self.tree.get(current_id) {
+                if let Some(san) = &node.san {
+                    let (move_num, is_black) = node.move_number(&self.tree);
+
+                    // Check if this move has sibling sub-variations
+                    // (parent has other children = alternatives to this move)
+                    let has_sibling_sub_variations = if let Some(parent_id) = node.parent_id {
+                        if let Some(parent) = self.tree.get(parent_id) {
+                            parent.variation_children().len() > 0
+                                && parent.main_line_child() == Some(current_id)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    // Check if this move gives check or checkmate
+                    let is_check = node.position.is_check();
+                    let is_checkmate = node.position.is_checkmate();
+
+                    moves.push(VariationMoveDisplay {
+                        node_id: current_id,
+                        move_num,
+                        is_black,
+                        san: san.clone(),
+                        has_sibling_sub_variations,
+                        is_check,
+                        is_checkmate,
+                    });
+                }
+
+                // Follow main line continuation
+                if let Some(child_id) = node.main_line_child() {
+                    current_id = child_id;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        moves
+    }
+
+    /// Check if any node has variations (for UI to show/hide variation controls)
+    #[allow(dead_code)]
+    pub fn has_any_variations(&self) -> bool {
+        !self.tree.nodes_with_variations().is_empty()
+    }
+
+    /// Toggle collapse state for variations of a given node
+    pub fn toggle_variation_collapse(&mut self, node_id: MoveNodeId) {
+        if self.collapsed_variations.contains(&node_id) {
+            self.collapsed_variations.remove(&node_id);
+        } else {
+            self.collapsed_variations.insert(node_id);
+        }
+    }
+
+    /// Check if variations for a given node are collapsed
+    pub fn is_variation_collapsed(&self, node_id: MoveNodeId) -> bool {
+        self.collapsed_variations.contains(&node_id)
     }
 }
 
-/// Display data for a pair of moves (one full move = white + black)
+/// Display data for a move in the main line
 #[derive(Clone, Debug)]
-pub struct MoveDisplayPair {
+pub struct MainLineMoveDisplay {
+    pub node_id: MoveNodeId,
     pub move_num: usize,
-    pub white_move_idx: usize,
-    pub white_san: String,
-    /// (half_move_index, san) for black's move if it exists
-    pub black_move: Option<(usize, String)>,
+    pub is_black: bool,
+    pub san: String,
+    /// Whether there are alternative moves (siblings) to this move
+    pub has_sibling_variations: bool,
+    #[allow(dead_code)]
+    pub sibling_variation_count: usize,
+    /// Whether this move gives check
+    pub is_check: bool,
+    /// Whether this move gives checkmate
+    pub is_checkmate: bool,
+}
+
+/// Display data for a complete variation line
+#[derive(Clone, Debug)]
+pub struct VariationDisplay {
+    #[allow(dead_code)]
+    pub start_node_id: MoveNodeId,
+    #[allow(dead_code)]
+    pub start_move_num: usize,
+    #[allow(dead_code)]
+    pub starts_with_black: bool,
+    pub moves: Vec<VariationMoveDisplay>,
+}
+
+/// Display data for a single move within a variation
+#[derive(Clone, Debug)]
+pub struct VariationMoveDisplay {
+    pub node_id: MoveNodeId,
+    pub move_num: usize,
+    pub is_black: bool,
+    pub san: String,
+    /// Whether there are alternative moves (siblings) to this move within the variation
+    pub has_sibling_sub_variations: bool,
+    /// Whether this move gives check
+    pub is_check: bool,
+    /// Whether this move gives checkmate
+    pub is_checkmate: bool,
 }
 
 impl Default for GameModel {
