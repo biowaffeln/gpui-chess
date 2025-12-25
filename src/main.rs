@@ -1,7 +1,7 @@
 use gpui::{
-    App, Application, AssetSource, Bounds, Context, Hsla, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, SharedString, Window, WindowBounds, WindowOptions, div, img,
-    prelude::*, px, rgb, size,
+    App, Application, AssetSource, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Rgba, SharedString, Window, WindowBounds, WindowOptions, div, img, prelude::*,
+    px, rgb, size,
 };
 use shakmaty::{Chess, Color as SColor, File, Move, Position, Rank, Role, Square};
 use std::borrow::Cow;
@@ -11,8 +11,7 @@ use std::path::PathBuf;
 const SQUARE_SIZE: f32 = 60.0;
 const BOARD_SIZE: f32 = SQUARE_SIZE * 8.0;
 const BOARD_PADDING: f32 = 20.0;
-const STATUS_HEIGHT: f32 = 24.0;
-const PIECE_SCALE: f32 = 0.8; // piece size relative to square
+const PIECE_SCALE: f32 = 0.98; // piece size relative to square
 const GHOST_OPACITY: f32 = 0.4;
 
 // filesystem-based asset source
@@ -152,9 +151,9 @@ impl ChessBoard {
 
     // convert window position to board row/col (if within board)
     fn pos_to_square(&self, x: f32, y: f32) -> Option<(usize, usize)> {
-        // board starts at (BOARD_PADDING, BOARD_PADDING + STATUS_HEIGHT)
+        // board starts at (BOARD_PADDING, BOARD_PADDING)
         let board_x = x - BOARD_PADDING;
-        let board_y = y - BOARD_PADDING - STATUS_HEIGHT;
+        let board_y = y - BOARD_PADDING;
 
         if board_x < 0.0 || board_y < 0.0 {
             return None;
@@ -239,21 +238,11 @@ impl ChessBoard {
     }
 }
 
-fn square_color(row: usize, col: usize) -> Hsla {
+fn square_color(row: usize, col: usize) -> Rgba {
     if (row + col) % 2 == 0 {
-        Hsla {
-            h: 0.1,
-            s: 0.3,
-            l: 0.85,
-            a: 1.0,
-        }
+        rgb(0xEFD9B5)
     } else {
-        Hsla {
-            h: 0.38,
-            s: 0.45,
-            l: 0.35,
-            a: 1.0,
-        }
+        rgb(0xB48764)
     }
 }
 
@@ -306,25 +295,8 @@ impl Render for ChessBoard {
         let entity_down = entity.clone();
         let entity_move = entity.clone();
         let entity_up = entity;
-        let current_turn = self.current_turn();
         let drag_state = self.drag_state;
         let dragging_from = drag_state.map(|d| (d.from_row, d.from_col));
-
-        let status_text = if self.is_checkmate() {
-            let winner = match current_turn {
-                PieceColor::White => "Black",
-                PieceColor::Black => "White",
-            };
-            format!("Checkmate! {} wins", winner)
-        } else if self.is_stalemate() {
-            "Stalemate!".to_string()
-        } else {
-            let turn = match current_turn {
-                PieceColor::White => "White",
-                PieceColor::Black => "Black",
-            };
-            format!("{} to move", turn)
-        };
 
         // floating piece follows cursor during drag
         let floating_piece = drag_state.map(|d| {
@@ -343,10 +315,10 @@ impl Render for ChessBoard {
             .flex()
             .flex_col()
             .bg(rgb(0x2a2a2a))
-            .size(px(BOARD_SIZE + 40.0))
+            .w_full()
+            .h_full()
+            .min_w(px(BOARD_SIZE + 44.0))
             .p(px(BOARD_PADDING))
-            .gap_2()
-            .child(div().text_color(rgb(0xffffff)).text_sm().child(status_text))
             .child(
                 div()
                     .flex()
@@ -414,7 +386,7 @@ fn main() {
     Application::new()
         .with_assets(FileAssets::new())
         .run(|cx: &mut App| {
-            let window_size = BOARD_SIZE + 60.0; // slightly taller for status
+            let window_size = BOARD_SIZE + 40.0;
             let bounds = Bounds::centered(None, size(px(window_size), px(window_size)), cx);
             cx.open_window(
                 WindowOptions {
