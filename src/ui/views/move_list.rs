@@ -2,9 +2,10 @@
 //!
 //! Uses a hybrid display: main line inline, variations as expandable sections.
 
-use gpui::{AnyElement, App, Div, Entity, SharedString, div, prelude::*, px, rgb};
+use gpui::{AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::Icon;
 
+use super::{MoveBack, MoveForward, MoveToEnd, MoveToStart};
 use crate::domain::MoveNodeId;
 use crate::models::{GameModel, MainLineMoveDisplay, VariationDisplay};
 use crate::ui::theme::{
@@ -29,11 +30,7 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
     let is_at_leaf = game.is_at_leaf();
     let current_node_id = game.current_node_id();
 
-    // Clone model for navigation closures
-    let model_start = model.clone();
-    let model_back = model.clone();
-    let model_forward = model.clone();
-    let model_end = model.clone();
+    // Note: navigation is handled via actions (see MoveBack, MoveForward, etc.)
 
     // Build the move content
     let moves_content = if main_line.is_empty() {
@@ -85,45 +82,25 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
                 .child(render_nav_button(
                     "assets/caret-double-left.svg",
                     !is_at_root,
-                    move |cx| {
-                        model_start.update(cx, |game, cx| {
-                            game.go_to_start();
-                            cx.notify();
-                        });
-                    },
+                    |window, cx| window.dispatch_action(Box::new(MoveToStart), cx),
                 ))
                 // Back button
                 .child(render_nav_button(
                     "assets/caret-left.svg",
                     !is_at_root,
-                    move |cx| {
-                        model_back.update(cx, |game, cx| {
-                            game.go_back();
-                            cx.notify();
-                        });
-                    },
+                    |window, cx| window.dispatch_action(Box::new(MoveBack), cx),
                 ))
                 // Forward button
                 .child(render_nav_button(
                     "assets/caret-right.svg",
                     !is_at_leaf,
-                    move |cx| {
-                        model_forward.update(cx, |game, cx| {
-                            game.go_forward();
-                            cx.notify();
-                        });
-                    },
+                    |window, cx| window.dispatch_action(Box::new(MoveForward), cx),
                 ))
                 // End button
                 .child(render_nav_button(
                     "assets/caret-double-right.svg",
                     !is_at_leaf,
-                    move |cx| {
-                        model_end.update(cx, |game, cx| {
-                            game.go_to_end();
-                            cx.notify();
-                        });
-                    },
+                    |window, cx| window.dispatch_action(Box::new(MoveToEnd), cx),
                 )),
         );
 
@@ -413,7 +390,7 @@ fn render_collapse_button(
 fn render_nav_button(
     icon_path: &'static str,
     enabled: bool,
-    on_click: impl Fn(&mut App) + 'static,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let text_color = if enabled {
         rgb(TEXT_PRIMARY)
@@ -432,8 +409,8 @@ fn render_nav_button(
             el.bg(rgb(NAV_BUTTON_BG))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(NAV_BUTTON_HOVER_BG)))
-                .on_click(move |_ev, _window, cx| {
-                    on_click(cx);
+                .on_click(move |_ev, window, cx| {
+                    on_click(window, cx);
                 })
         })
         .when(!enabled, |el| el.bg(rgb(0x2a2a2a)))

@@ -1,8 +1,8 @@
 //! Chess board view - the main board with drag-and-drop piece movement.
 
 use gpui::{
-    Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Subscription, Window, canvas, div, img, prelude::*, px, rgb,
+    Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
 };
 use gpui_component::resizable::{h_resizable, resizable_panel};
 
@@ -12,9 +12,13 @@ use crate::ui::theme::{
 };
 use crate::ui::views::render_move_list_panel;
 
+// Define navigation actions
+actions!(chess, [MoveBack, MoveForward, MoveToStart, MoveToEnd]);
+
 /// The main chess board view that observes a GameModel
 pub struct ChessBoardView {
     model: Entity<GameModel>,
+    focus_handle: FocusHandle,
     _subscription: Subscription,
 }
 
@@ -23,6 +27,7 @@ impl ChessBoardView {
         let _subscription = cx.observe(&model, |_, _, cx| cx.notify());
         Self {
             model,
+            focus_handle: cx.focus_handle(),
             _subscription,
         }
     }
@@ -188,20 +193,54 @@ impl Render for ChessBoardView {
         // Move list panel
         let move_list_panel_content = render_move_list_panel(&model, cx);
 
+        // Clone model for each action handler
+        let model_back = model.clone();
+        let model_forward = model.clone();
+        let model_start = model.clone();
+        let model_end = model.clone();
+
         // Main resizable layout
-        div().size_full().font_family("Berkeley Mono").child(
-            h_resizable("chess-layout")
-                .child(
-                    resizable_panel()
-                        .size(px(INITIAL_LEFT_PANEL))
-                        .size_range(px(320.)..px(1200.))
-                        .child(board_panel_with_measure),
-                )
-                .child(
-                    resizable_panel()
-                        .size_range(px(150.)..Pixels::MAX)
-                        .child(move_list_panel_content),
-                ),
-        )
+        div()
+            .size_full()
+            .font_family("Berkeley Mono")
+            .track_focus(&self.focus_handle)
+            .on_action(move |_: &MoveBack, _window, cx| {
+                model_back.update(cx, |game, cx| {
+                    game.go_back();
+                    cx.notify();
+                });
+            })
+            .on_action(move |_: &MoveForward, _window, cx| {
+                model_forward.update(cx, |game, cx| {
+                    game.go_forward();
+                    cx.notify();
+                });
+            })
+            .on_action(move |_: &MoveToStart, _window, cx| {
+                model_start.update(cx, |game, cx| {
+                    game.go_to_start();
+                    cx.notify();
+                });
+            })
+            .on_action(move |_: &MoveToEnd, _window, cx| {
+                model_end.update(cx, |game, cx| {
+                    game.go_to_end();
+                    cx.notify();
+                });
+            })
+            .child(
+                h_resizable("chess-layout")
+                    .child(
+                        resizable_panel()
+                            .size(px(INITIAL_LEFT_PANEL))
+                            .size_range(px(320.)..px(1200.))
+                            .child(board_panel_with_measure),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size_range(px(150.)..Pixels::MAX)
+                            .child(move_list_panel_content),
+                    ),
+            )
     }
 }
