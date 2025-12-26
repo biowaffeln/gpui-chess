@@ -209,6 +209,147 @@ impl MoveTree {
         }
         line
     }
+
+    /// Delete a node and all its descendants.
+    /// If the current position is within the deleted subtree, navigates to the parent.
+    /// Returns true on success, false if node_id is root or invalid.
+    pub fn delete_node(&mut self, node_id: MoveNodeId) -> bool {
+        // Can't delete root
+        if node_id == 0 || node_id >= self.nodes.len() {
+            return false;
+        }
+
+        // Get parent_id before we modify anything
+        let parent_id = match self.nodes[node_id].parent_id {
+            Some(pid) => pid,
+            None => return false, // Root node, shouldn't happen given check above
+        };
+
+        // Check if current position is in the subtree being deleted
+        if self.is_descendant_of(self.current_id, node_id) {
+            self.current_id = parent_id;
+        }
+
+        // Remove from parent's children
+        self.nodes[parent_id].children.retain(|&id| id != node_id);
+
+        // Note: We don't actually remove nodes from the vec (would invalidate IDs).
+        // The nodes become orphaned but that's fine for our use case.
+
+        true
+    }
+
+    /// Check if `node_id` is equal to `ancestor_id` or is a descendant of it
+    fn is_descendant_of(&self, node_id: MoveNodeId, ancestor_id: MoveNodeId) -> bool {
+        let mut current = node_id;
+        loop {
+            if current == ancestor_id {
+                return true;
+            }
+            match self.nodes.get(current).and_then(|n| n.parent_id) {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
+    }
+
+    /// Promote a variation to be the main line at its branch point.
+    /// This finds the first ancestor that is not the main line continuation
+    /// (i.e., not the first child of its parent) and promotes that.
+    /// Returns true on success.
+    pub fn promote_variation(&mut self, node_id: MoveNodeId) -> bool {
+        if node_id == 0 || node_id >= self.nodes.len() {
+            return false;
+        }
+
+        // Find the first ancestor that is a variation (not first child of parent)
+        let branch_node_id = self.find_variation_branch_point(node_id);
+
+        if branch_node_id == 0 {
+            // Already on main line, nothing to promote
+            return true;
+        }
+
+        // Now promote that branch node
+        self.promote_node(branch_node_id)
+    }
+
+    /// Find the first ancestor (including self) that is not the first child of its parent.
+    /// Returns 0 if already on main line.
+    fn find_variation_branch_point(&self, node_id: MoveNodeId) -> MoveNodeId {
+        let mut current = node_id;
+
+        while current != 0 {
+            let parent_id = match self.nodes[current].parent_id {
+                Some(pid) => pid,
+                None => return 0, // at root
+            };
+
+            let children = &self.nodes[parent_id].children;
+            if children.first() != Some(&current) {
+                // This node is not the first child - it's where the variation branches
+                return current;
+            }
+
+            current = parent_id;
+        }
+
+        0 // On main line
+    }
+
+    /// Promote a specific node to be the first child of its parent.
+    fn promote_node(&mut self, node_id: MoveNodeId) -> bool {
+        let parent_id = match self.nodes[node_id].parent_id {
+            Some(pid) => pid,
+            None => return false,
+        };
+
+        let children = &mut self.nodes[parent_id].children;
+
+        // Find position of node_id in children
+        let pos = match children.iter().position(|&id| id == node_id) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        // Already first? Nothing to do
+        if pos == 0 {
+            return true;
+        }
+
+        // Move to front
+        let id = children.remove(pos);
+        children.insert(0, id);
+
+        true
+    }
+
+    /// Promote a variation to be the global main line.
+    /// This promotes at every branch point from this node up to the root.
+    /// Returns true on success.
+    pub fn promote_to_main_line(&mut self, node_id: MoveNodeId) -> bool {
+        if node_id == 0 || node_id >= self.nodes.len() {
+            return false;
+        }
+
+        // Collect path from node to root
+        let mut path = Vec::new();
+        let mut current = node_id;
+        while current != 0 {
+            path.push(current);
+            match self.nodes[current].parent_id {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+
+        // Promote each node in the path (from root towards the node)
+        for &nid in path.iter().rev() {
+            self.promote_variation(nid);
+        }
+
+        true
+    }
 }
 
 impl Default for MoveTree {
@@ -293,5 +434,129 @@ mod tests {
         assert_eq!(root.children.len(), 2);
         assert_eq!(root.main_line_child(), Some(1)); // e4 is main line
         assert_eq!(root.variation_children(), &[2]); // d4 is variation
+    }
+
+    #[test]
+    fn test_delete_node() {
+        let mut tree = MoveTree::new();
+        let pos = Chess::default();
+
+        // Build: 1.e4 e5 2.Nf3
+        tree.add_move(pos.clone(), "e4".to_string()); // id=1
+        tree.add_move(pos.clone(), "e5".to_string()); // id=2
+        tree.add_move(pos.clone(), "Nf3".to_string()); // id=3
+
+        // Delete e5 (and its descendants)
+        assert!(tree.delete_node(2));
+
+        // e4 should now have no children
+        let e4 = tree.get(1).unwrap();
+        assert!(e4.children.is_empty());
+
+        // Current should be e4 (parent of deleted)
+        assert_eq!(tree.current_id(), 1);
+    }
+
+    #[test]
+    fn test_delete_node_not_current() {
+        let mut tree = MoveTree::new();
+        let pos = Chess::default();
+
+        // Build: 1.e4 (1.d4)
+        tree.add_move(pos.clone(), "e4".to_string()); // id=1
+        tree.go_to_root();
+        tree.add_move(pos.clone(), "d4".to_string()); // id=2
+
+        // We're on d4, delete e4
+        assert!(tree.delete_node(1));
+
+        // Should still be on d4
+        assert_eq!(tree.current_id(), 2);
+
+        // Root should only have d4 as child now
+        let root = tree.get(0).unwrap();
+        assert_eq!(root.children, vec![2]);
+    }
+
+    #[test]
+    fn test_cannot_delete_root() {
+        let mut tree = MoveTree::new();
+        assert!(!tree.delete_node(0));
+    }
+
+    #[test]
+    fn test_promote_variation() {
+        let mut tree = MoveTree::new();
+        let pos = Chess::default();
+
+        // Build: 1.e4 (1.d4, 1.c4)
+        tree.add_move(pos.clone(), "e4".to_string()); // id=1
+        tree.go_to_root();
+        tree.add_move(pos.clone(), "d4".to_string()); // id=2
+        tree.go_to_root();
+        tree.add_move(pos.clone(), "c4".to_string()); // id=3
+
+        let root = tree.get(0).unwrap();
+        assert_eq!(root.children, vec![1, 2, 3]); // e4 is main line
+
+        // Promote d4
+        assert!(tree.promote_variation(2));
+
+        let root = tree.get(0).unwrap();
+        assert_eq!(root.children, vec![2, 1, 3]); // d4 is now main line
+    }
+
+    #[test]
+    fn test_promote_variation_from_middle_of_variation() {
+        let mut tree = MoveTree::new();
+        let pos = Chess::default();
+
+        // Build: 1.e4 e5 (1...c5 2.Nf3)
+        //                      ^-- promote from here should promote the whole c5 variation
+        tree.add_move(pos.clone(), "e4".to_string()); // id=1
+        tree.add_move(pos.clone(), "e5".to_string()); // id=2
+
+        // Go back to e4, add c5 variation
+        tree.go_to(1);
+        tree.add_move(pos.clone(), "c5".to_string()); // id=3
+        tree.add_move(pos.clone(), "Nf3".to_string()); // id=4
+
+        // e4's children are [e5, c5]
+        let e4 = tree.get(1).unwrap();
+        assert_eq!(e4.children, vec![2, 3]);
+
+        // Promote from Nf3 (id=4) - should find branch point at c5 (id=3) and promote that
+        assert!(tree.promote_variation(4));
+
+        // Now e4's children should be [c5, e5]
+        let e4 = tree.get(1).unwrap();
+        assert_eq!(e4.children, vec![3, 2]);
+    }
+
+    #[test]
+    fn test_promote_to_main_line() {
+        let mut tree = MoveTree::new();
+        let pos = Chess::default();
+
+        // Build: 1.e4 e5 (1...c5) 2.Nf3
+        //                  ^-- we want to promote this deeply nested variation
+        tree.add_move(pos.clone(), "e4".to_string()); // id=1
+        tree.add_move(pos.clone(), "e5".to_string()); // id=2
+        tree.add_move(pos.clone(), "Nf3".to_string()); // id=3
+
+        // Go back to e4, add c5 as variation
+        tree.go_to(1);
+        tree.add_move(pos.clone(), "c5".to_string()); // id=4
+
+        // Verify structure: e4's children are [e5, c5]
+        let e4 = tree.get(1).unwrap();
+        assert_eq!(e4.children, vec![2, 4]);
+
+        // Promote c5 to main line
+        assert!(tree.promote_to_main_line(4));
+
+        // Now e4's children should be [c5, e5]
+        let e4 = tree.get(1).unwrap();
+        assert_eq!(e4.children, vec![4, 2]);
     }
 }

@@ -4671,6 +4671,8 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui-component",
+ "schemars",
+ "serde",
  "shakmaty",
 ]
 

@@ -144,6 +144,22 @@ impl GameModel {
             SColor::Black => PieceColor::Black,
         }
     }
+
+    /// Delete a move and all its descendants.
+    /// If currently viewing the deleted move or a descendant, navigates to parent.
+    pub fn delete_move(&mut self, node_id: MoveNodeId) -> bool {
+        self.tree.delete_node(node_id)
+    }
+
+    /// Promote a variation to be the main line at its branch point.
+    pub fn promote_variation(&mut self, node_id: MoveNodeId) -> bool {
+        self.tree.promote_variation(node_id)
+    }
+
+    /// Promote a variation to be the global main line (promotes at all branch points).
+    pub fn promote_to_main_line(&mut self, node_id: MoveNodeId) -> bool {
+        self.tree.promote_to_main_line(node_id)
+    }
 }
 
 impl Default for GameModel {
