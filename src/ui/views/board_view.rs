@@ -168,7 +168,7 @@ impl Render for ChessBoardView {
         let move_list_panel_content = render_move_list_panel(&model, cx);
 
         // Main resizable layout
-        div().size_full().child(
+        div().size_full().font_family("Berkeley Mono").child(
             h_resizable("chess-layout")
                 .child(
                     resizable_panel()

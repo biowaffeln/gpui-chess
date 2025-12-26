@@ -36,10 +36,7 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
 
     // Build the move content
     let moves_content = if main_line.is_empty() {
-        div()
-            .text_color(rgb(TEXT_SECONDARY))
-            .text_sm()
-            .child("No moves yet")
+        div().text_color(rgb(TEXT_SECONDARY)).child("No moves yet")
     } else {
         render_main_line_with_variations(model, &main_line, current_node_id, game)
     };
@@ -59,7 +56,6 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
                 .p_4()
                 .pb_2()
                 .text_color(rgb(TEXT_PRIMARY))
-                .text_sm()
                 .border_b_1()
                 .border_color(rgb(BORDER_COLOR))
                 .child("Move History"),
@@ -145,7 +141,6 @@ fn render_main_line_with_variations(
             current_inline_moves.push(
                 div()
                     .text_color(rgb(TEXT_SECONDARY))
-                    .text_sm()
                     .child(format!("{}.", mv.move_num))
                     .into_any_element(),
             );
@@ -337,7 +332,6 @@ fn render_variation_line(
         .border_l_2()
         .border_color(rgb(VARIATION_BORDER))
         .rounded_sm()
-        .text_sm()
         .children(segments)
 }
 
@@ -364,7 +358,6 @@ fn render_clickable_move_node(
         .rounded(px(3.0))
         .cursor_pointer()
         .text_color(rgb(TEXT_PRIMARY))
-        .text_sm()
         .when(is_selected, |el| el.bg(rgb(MOVE_SELECTED_BG)))
         .when(!is_selected, |el| el.hover(|s| s.bg(rgb(MOVE_HOVER_BG))))
         .on_click(move |_ev, _window, cx| {
@@ -389,7 +382,6 @@ fn render_collapse_button(
         .rounded(px(3.0))
         .cursor_pointer()
         .text_color(rgb(TEXT_SECONDARY))
-        .text_sm()
         .hover(|s| s.bg(rgb(MOVE_HOVER_BG)))
         .on_click(move |_ev, _window, cx| {
             model.update(cx, |game, cx| {
@@ -416,7 +408,6 @@ fn render_nav_button(
         } else {
             rgb(NAV_BUTTON_DISABLED)
         })
-        .text_sm()
         .font_weight(gpui::FontWeight::BOLD)
         .when(enabled, |el| {
             el.bg(rgb(NAV_BUTTON_BG))
