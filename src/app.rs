@@ -1,7 +1,7 @@
 //! Application setup and window creation.
 
 use gpui::{App, Bounds, KeyBinding, WindowBounds, WindowOptions, prelude::*, px, size};
-use gpui_component::{Root, Theme};
+use gpui_component::{Root, Theme, ThemeMode};
 
 use crate::models::GameModel;
 use crate::ui::views::{ChessBoardView, MoveBack, MoveForward, MoveToEnd, MoveToStart};
@@ -10,7 +10,8 @@ use crate::ui::views::{ChessBoardView, MoveBack, MoveForward, MoveToEnd, MoveToS
 pub fn run(cx: &mut App) {
     gpui_component::init(cx);
 
-    Theme::global_mut(cx).border = gpui::hsla(0.0, 0.0, 0.24, 1.0);
+    // Set dark theme for the application
+    Theme::change(ThemeMode::Dark, None, cx);
 
     // Bind keyboard shortcuts
     cx.bind_keys([

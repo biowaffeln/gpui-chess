@@ -6,9 +6,12 @@ use std::mem;
 
 use gpui::{AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::Icon;
+use gpui_component::menu::ContextMenuExt;
 
 use super::board_view::MoveListState;
-use super::{MoveBack, MoveForward, MoveToEnd, MoveToStart};
+use super::{
+    DeleteMove, MoveBack, MoveForward, MoveToEnd, MoveToStart, PromoteToMainLine, PromoteVariation,
+};
 use crate::domain::MoveNodeId;
 use crate::models::GameModel;
 use crate::ui::display::{get_sibling_sub_variations, get_sibling_variations, main_line_display};
@@ -65,7 +68,6 @@ pub fn render_move_list_panel(
         .border_1()
         .border_color(rgb(BORDER_COLOR))
         .rounded_md()
-        .overflow_hidden()
         // Header (fixed)
         .child(
             div()
@@ -160,7 +162,7 @@ fn render_main_line_with_variations(
             );
         }
 
-        // The move itself
+        // The move itself (main line = variation_depth 0)
         current_inline_moves.push(
             render_clickable_move_node(
                 node_id,
@@ -169,6 +171,7 @@ fn render_main_line_with_variations(
                 mv.is_check,
                 mv.is_checkmate,
                 model_move,
+                0, // main line
             )
             .into_any_element(),
         );
@@ -207,6 +210,7 @@ fn render_main_line_with_variations(
                             current_node_id,
                             game,
                             collapsed_variations,
+                            1, // first level of variation
                         )
                         .into_any_element(),
                     );
@@ -239,6 +243,7 @@ fn render_variations_block(
     current_node_id: MoveNodeId,
     game: &GameModel,
     collapsed_variations: &std::collections::HashSet<MoveNodeId>,
+    variation_depth: usize,
 ) -> Div {
     div()
         .flex()
@@ -255,6 +260,7 @@ fn render_variations_block(
                 current_node_id,
                 game,
                 collapsed_variations,
+                variation_depth,
             )
         }))
 }
@@ -267,6 +273,7 @@ fn render_variation_line(
     current_node_id: MoveNodeId,
     game: &GameModel,
     collapsed_variations: &std::collections::HashSet<MoveNodeId>,
+    variation_depth: usize,
 ) -> Div {
     // Build the content with proper segmentation for sub-variations
     let mut segments: Vec<AnyElement> = Vec::new();
@@ -300,6 +307,7 @@ fn render_variation_line(
                 mv.is_check,
                 mv.is_checkmate,
                 model_move,
+                variation_depth,
             )
             .into_any_element(),
         );
@@ -338,6 +346,7 @@ fn render_variation_line(
                             current_node_id,
                             game,
                             collapsed_variations,
+                            variation_depth + 1, // nested deeper
                         )
                         .into_any_element(),
                     );
@@ -373,6 +382,7 @@ fn render_variation_line(
 }
 
 /// Render a clickable move that navigates to a specific node
+/// variation_depth: 0 = main line, 1+ = inside a variation
 fn render_clickable_move_node(
     node_id: MoveNodeId,
     san: String,
@@ -380,6 +390,7 @@ fn render_clickable_move_node(
     is_check: bool,
     is_checkmate: bool,
     model: Entity<GameModel>,
+    variation_depth: usize,
 ) -> impl IntoElement {
     // Build the display text with check/checkmate symbols
     let mut display_text = san;
@@ -395,13 +406,35 @@ fn render_clickable_move_node(
         .rounded(px(3.0))
         .cursor_pointer()
         .text_color(rgb(TEXT_PRIMARY))
+        .overflow_hidden()
         .when(is_selected, |el| el.bg(rgb(MOVE_SELECTED_BG)))
         .when(!is_selected, |el| el.hover(|s| s.bg(rgb(MOVE_HOVER_BG))))
-        .on_click(move |_ev, _window, cx| {
-            model.update(cx, |game, cx| {
-                game.go_to_node(node_id);
-                cx.notify();
-            });
+        .on_click({
+            let model = model.clone();
+            move |_ev, _window, cx| {
+                model.update(cx, |game, cx| {
+                    game.go_to_node(node_id);
+                    cx.notify();
+                });
+            }
+        })
+        .context_menu(move |menu, _window, _cx| {
+            let mut menu = menu.menu("Delete Move", Box::new(DeleteMove { node_id }));
+
+            if variation_depth >= 1 {
+                menu = menu
+                    .separator()
+                    .menu("Promote Variation", Box::new(PromoteVariation { node_id }));
+            }
+
+            if variation_depth >= 2 {
+                menu = menu.menu(
+                    "Promote to Main Line",
+                    Box::new(PromoteToMainLine { node_id }),
+                );
+            }
+
+            menu
         })
         .child(display_text)
 }

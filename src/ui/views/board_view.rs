@@ -1,8 +1,8 @@
 //! Chess board view - the main board with drag-and-drop piece movement.
 
 use gpui::{
-    Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
+    Action, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
 };
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use std::collections::HashSet;
@@ -19,6 +19,22 @@ use crate::ui::views::render_move_list_panel;
 
 // Define navigation actions
 actions!(chess, [MoveBack, MoveForward, MoveToStart, MoveToEnd]);
+
+// Define move tree actions with node_id data
+#[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
+pub struct DeleteMove {
+    pub node_id: MoveNodeId,
+}
+
+#[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
+pub struct PromoteVariation {
+    pub node_id: MoveNodeId,
+}
+
+#[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
+pub struct PromoteToMainLine {
+    pub node_id: MoveNodeId,
+}
 
 /// UI state for the board view (not part of game model)
 pub struct BoardViewState {
@@ -264,6 +280,9 @@ impl Render for ChessBoardView {
         let model_forward = model.clone();
         let model_start = model.clone();
         let model_end = model.clone();
+        let model_delete = model.clone();
+        let model_promote = model.clone();
+        let model_promote_main = model.clone();
 
         // Main resizable layout
         div()
@@ -291,6 +310,24 @@ impl Render for ChessBoardView {
             .on_action(move |_: &MoveToEnd, _window, cx| {
                 model_end.update(cx, |game, cx| {
                     game.go_to_end();
+                    cx.notify();
+                });
+            })
+            .on_action(move |action: &DeleteMove, _window, cx| {
+                model_delete.update(cx, |game, cx| {
+                    game.delete_move(action.node_id);
+                    cx.notify();
+                });
+            })
+            .on_action(move |action: &PromoteVariation, _window, cx| {
+                model_promote.update(cx, |game, cx| {
+                    game.promote_variation(action.node_id);
+                    cx.notify();
+                });
+            })
+            .on_action(move |action: &PromoteToMainLine, _window, cx| {
+                model_promote_main.update(cx, |game, cx| {
+                    game.promote_to_main_line(action.node_id);
                     cx.notify();
                 });
             })
