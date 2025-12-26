@@ -3,6 +3,7 @@
 //! Uses a hybrid display: main line inline, variations as expandable sections.
 
 use gpui::{AnyElement, App, Div, Entity, SharedString, div, prelude::*, px, rgb};
+use gpui_component::Icon;
 
 use crate::domain::MoveNodeId;
 use crate::models::{GameModel, MainLineMoveDisplay, VariationDisplay};
@@ -81,33 +82,49 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
                 .border_t_1()
                 .border_color(rgb(BORDER_COLOR))
                 // Start button
-                .child(render_nav_button("⟨⟨", !is_at_root, move |cx| {
-                    model_start.update(cx, |game, cx| {
-                        game.go_to_start();
-                        cx.notify();
-                    });
-                }))
+                .child(render_nav_button(
+                    "assets/caret-double-left.svg",
+                    !is_at_root,
+                    move |cx| {
+                        model_start.update(cx, |game, cx| {
+                            game.go_to_start();
+                            cx.notify();
+                        });
+                    },
+                ))
                 // Back button
-                .child(render_nav_button("⟨", !is_at_root, move |cx| {
-                    model_back.update(cx, |game, cx| {
-                        game.go_back();
-                        cx.notify();
-                    });
-                }))
+                .child(render_nav_button(
+                    "assets/caret-left.svg",
+                    !is_at_root,
+                    move |cx| {
+                        model_back.update(cx, |game, cx| {
+                            game.go_back();
+                            cx.notify();
+                        });
+                    },
+                ))
                 // Forward button
-                .child(render_nav_button("⟩", !is_at_leaf, move |cx| {
-                    model_forward.update(cx, |game, cx| {
-                        game.go_forward();
-                        cx.notify();
-                    });
-                }))
+                .child(render_nav_button(
+                    "assets/caret-right.svg",
+                    !is_at_leaf,
+                    move |cx| {
+                        model_forward.update(cx, |game, cx| {
+                            game.go_forward();
+                            cx.notify();
+                        });
+                    },
+                ))
                 // End button
-                .child(render_nav_button("⟩⟩", !is_at_leaf, move |cx| {
-                    model_end.update(cx, |game, cx| {
-                        game.go_to_end();
-                        cx.notify();
-                    });
-                })),
+                .child(render_nav_button(
+                    "assets/caret-double-right.svg",
+                    !is_at_leaf,
+                    move |cx| {
+                        model_end.update(cx, |game, cx| {
+                            game.go_to_end();
+                            cx.notify();
+                        });
+                    },
+                )),
         );
 
     div()
@@ -394,20 +411,22 @@ fn render_collapse_button(
 
 /// Render a navigation button (back/forward)
 fn render_nav_button(
-    label: &'static str,
+    icon_path: &'static str,
     enabled: bool,
     on_click: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
+    let text_color = if enabled {
+        rgb(TEXT_PRIMARY)
+    } else {
+        rgb(NAV_BUTTON_DISABLED)
+    };
+
     div()
-        .id(SharedString::from(format!("nav-{}", label)))
+        .id(SharedString::from(format!("nav-{}", icon_path)))
         .px_4()
         .py_2()
         .rounded(px(4.0))
-        .text_color(if enabled {
-            rgb(TEXT_PRIMARY)
-        } else {
-            rgb(NAV_BUTTON_DISABLED)
-        })
+        .text_color(text_color)
         .font_weight(gpui::FontWeight::BOLD)
         .when(enabled, |el| {
             el.bg(rgb(NAV_BUTTON_BG))
@@ -418,5 +437,5 @@ fn render_nav_button(
                 })
         })
         .when(!enabled, |el| el.bg(rgb(0x2a2a2a)))
-        .child(label)
+        .child(Icon::empty().path(icon_path).text_color(text_color))
 }

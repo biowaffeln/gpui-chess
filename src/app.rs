@@ -1,7 +1,7 @@
 //! Application setup and window creation.
 
 use gpui::{App, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
-use gpui_component::Root;
+use gpui_component::{Root, Theme};
 
 use crate::models::GameModel;
 use crate::ui::views::ChessBoardView;
@@ -9,6 +9,8 @@ use crate::ui::views::ChessBoardView;
 /// Initialize and run the chess application
 pub fn run(cx: &mut App) {
     gpui_component::init(cx);
+
+    Theme::global_mut(cx).border = gpui::hsla(0.0, 0.0, 0.24, 1.0);
 
     // Create the game model
     let model = cx.new(|_| GameModel::new());
