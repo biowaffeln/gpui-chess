@@ -8,8 +8,7 @@ pub const PIECE_SCALE: f32 = 0.98; // piece size relative to square
 pub const GHOST_OPACITY: f32 = 0.4;
 
 // Initial panel sizes
-pub const INITIAL_LEFT_PANEL: f32 = 540.0;
-pub const INITIAL_RIGHT_PANEL: f32 = 280.0;
+pub const INITIAL_LEFT_PANEL: f32 = 450.0;
 
 // Board colors
 pub const LIGHT_SQUARE: u32 = 0xEFD9B5;

@@ -8,7 +8,7 @@ use gpui_component::resizable::{h_resizable, resizable_panel};
 
 use crate::models::{DragState, GameModel};
 use crate::ui::components::render_square;
-use crate::ui::theme::{BOARD_PADDING, INITIAL_LEFT_PANEL, INITIAL_RIGHT_PANEL, PANEL_BG};
+use crate::ui::theme::{BOARD_PADDING, INITIAL_LEFT_PANEL, PANEL_BG};
 use crate::ui::views::render_move_list_panel;
 
 /// The main chess board view that observes a GameModel
@@ -178,7 +178,6 @@ impl Render for ChessBoardView {
                 )
                 .child(
                     resizable_panel()
-                        .size(px(INITIAL_RIGHT_PANEL))
                         .size_range(px(150.)..Pixels::MAX)
                         .child(move_list_panel_content),
                 ),

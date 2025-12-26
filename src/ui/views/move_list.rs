@@ -326,12 +326,12 @@ fn render_variation_line(
         .flex()
         .flex_col()
         .gap_1()
-        .px_2()
+        .px_3()
         .py_1()
         .bg(rgb(VARIATION_BG))
         .border_l_2()
         .border_color(rgb(VARIATION_BORDER))
-        .rounded_sm()
+        .rounded_r_sm()
         .children(segments)
 }
 
