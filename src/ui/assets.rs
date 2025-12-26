@@ -5,6 +5,26 @@ use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::domain::{Piece, PieceColor, PieceKind};
+
+/// Get the SVG asset path for a chess piece
+pub fn piece_svg_path(piece: &Piece) -> &'static str {
+    match (piece.kind, piece.color) {
+        (PieceKind::Pawn, PieceColor::White) => "assets/pawn-white.svg",
+        (PieceKind::Pawn, PieceColor::Black) => "assets/pawn-black.svg",
+        (PieceKind::Rook, PieceColor::White) => "assets/rook-white.svg",
+        (PieceKind::Rook, PieceColor::Black) => "assets/rook-black.svg",
+        (PieceKind::Knight, PieceColor::White) => "assets/knight-white.svg",
+        (PieceKind::Knight, PieceColor::Black) => "assets/knight-black.svg",
+        (PieceKind::Bishop, PieceColor::White) => "assets/bishop-white.svg",
+        (PieceKind::Bishop, PieceColor::Black) => "assets/bishop-black.svg",
+        (PieceKind::Queen, PieceColor::White) => "assets/queen-white.svg",
+        (PieceKind::Queen, PieceColor::Black) => "assets/queen-black.svg",
+        (PieceKind::King, PieceColor::White) => "assets/king-white.svg",
+        (PieceKind::King, PieceColor::Black) => "assets/king-black.svg",
+    }
+}
+
 /// Filesystem-based asset source that looks for assets in multiple locations
 pub struct FileAssets {
     base_path: PathBuf,

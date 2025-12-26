@@ -2,15 +2,20 @@
 //!
 //! Uses a hybrid display: main line inline, variations as expandable sections.
 
+use std::mem;
+
 use gpui::{AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::Icon;
 
+use super::board_view::MoveListState;
 use super::{MoveBack, MoveForward, MoveToEnd, MoveToStart};
 use crate::domain::MoveNodeId;
-use crate::models::{GameModel, MainLineMoveDisplay, VariationDisplay};
+use crate::models::GameModel;
+use crate::ui::display::{get_sibling_sub_variations, get_sibling_variations, main_line_display};
 use crate::ui::theme::{
     BOARD_PADDING, BORDER_COLOR, MOVE_LIST_BG, PANEL_BG, TEXT_PRIMARY, TEXT_SECONDARY,
 };
+use crate::ui::view_models::{MainLineMoveDisplay, VariationDisplay};
 
 // Colors for move highlighting
 const MOVE_HOVER_BG: u32 = 0x3a3a3a;
@@ -23,12 +28,18 @@ const VARIATION_BORDER: u32 = 0x3a3a3a;
 
 /// Render the move list panel for a given game model.
 /// Returns a Div element that can be used as a child.
-pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
+pub fn render_move_list_panel(
+    model: &Entity<GameModel>,
+    move_list_state: &Entity<MoveListState>,
+    cx: &App,
+) -> Div {
     let game = model.read(cx);
-    let main_line = game.main_line_display();
+    let main_line = main_line_display(game);
     let is_at_root = game.is_at_root();
     let is_at_leaf = game.is_at_leaf();
     let current_node_id = game.current_node_id();
+
+    let collapsed_variations = &move_list_state.read(cx).collapsed_variations;
 
     // Note: navigation is handled via actions (see MoveBack, MoveForward, etc.)
 
@@ -36,7 +47,14 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
     let moves_content = if main_line.is_empty() {
         div().text_color(rgb(TEXT_SECONDARY)).child("No moves yet")
     } else {
-        render_main_line_with_variations(model, &main_line, current_node_id, game)
+        render_main_line_with_variations(
+            model,
+            move_list_state,
+            &main_line,
+            current_node_id,
+            game,
+            collapsed_variations,
+        )
     };
 
     let move_list = div()
@@ -117,9 +135,11 @@ pub fn render_move_list_panel(model: &Entity<GameModel>, cx: &App) -> Div {
 /// Uses a column layout where main line moves flow inline and variations are block-level
 fn render_main_line_with_variations(
     model: &Entity<GameModel>,
+    move_list_state: &Entity<MoveListState>,
     main_line: &[MainLineMoveDisplay],
     current_node_id: MoveNodeId,
     game: &GameModel,
+    collapsed_variations: &std::collections::HashSet<MoveNodeId>,
 ) -> Div {
     // Build segments: each segment is either inline moves or a variation block
     let mut segments: Vec<AnyElement> = Vec::new();
@@ -155,12 +175,12 @@ fn render_main_line_with_variations(
 
         // If this move has sibling variations, add collapse button and conditionally render variations
         if mv.has_sibling_variations {
-            let model_collapse = model.clone();
-            let is_collapsed = game.is_variation_collapsed(node_id);
+            let is_collapsed = collapsed_variations.contains(&node_id);
 
             // Add collapse button after the move
             current_inline_moves.push(
-                render_collapse_button(node_id, is_collapsed, model_collapse).into_any_element(),
+                render_collapse_button(node_id, is_collapsed, move_list_state.clone())
+                    .into_any_element(),
             );
 
             // Only flush and render variation block if expanded
@@ -172,16 +192,23 @@ fn render_main_line_with_variations(
                             .flex()
                             .flex_wrap()
                             .gap_1()
-                            .children(current_inline_moves.drain(..).collect::<Vec<_>>())
+                            .children(mem::take(&mut current_inline_moves))
                             .into_any_element(),
                     );
                 }
 
-                let variations = game.get_sibling_variations(node_id);
+                let variations = get_sibling_variations(game, node_id);
                 if !variations.is_empty() {
                     segments.push(
-                        render_variations_block(model, &variations, current_node_id, game)
-                            .into_any_element(),
+                        render_variations_block(
+                            model,
+                            move_list_state,
+                            &variations,
+                            current_node_id,
+                            game,
+                            collapsed_variations,
+                        )
+                        .into_any_element(),
                     );
                 }
             }
@@ -207,9 +234,11 @@ fn render_main_line_with_variations(
 /// Render a block of variations
 fn render_variations_block(
     model: &Entity<GameModel>,
+    move_list_state: &Entity<MoveListState>,
     variations: &[VariationDisplay],
     current_node_id: MoveNodeId,
     game: &GameModel,
+    collapsed_variations: &std::collections::HashSet<MoveNodeId>,
 ) -> Div {
     div()
         .flex()
@@ -218,19 +247,26 @@ fn render_variations_block(
         .w_full()
         .mt_1()
         .mb_1()
-        .children(
-            variations
-                .iter()
-                .map(|var| render_variation_line(model, var, current_node_id, game)),
-        )
+        .children(variations.iter().map(|var| {
+            render_variation_line(
+                model,
+                move_list_state,
+                var,
+                current_node_id,
+                game,
+                collapsed_variations,
+            )
+        }))
 }
 
 /// Render a single variation line
 fn render_variation_line(
     model: &Entity<GameModel>,
+    move_list_state: &Entity<MoveListState>,
     variation: &VariationDisplay,
     current_node_id: MoveNodeId,
     game: &GameModel,
+    collapsed_variations: &std::collections::HashSet<MoveNodeId>,
 ) -> Div {
     // Build the content with proper segmentation for sub-variations
     let mut segments: Vec<AnyElement> = Vec::new();
@@ -270,12 +306,12 @@ fn render_variation_line(
 
         // Check for sibling sub-variations (alternatives to this move)
         if mv.has_sibling_sub_variations {
-            let model_collapse = model.clone();
-            let is_collapsed = game.is_variation_collapsed(node_id);
+            let is_collapsed = collapsed_variations.contains(&node_id);
 
             // Add collapse button after the move
             current_inline.push(
-                render_collapse_button(node_id, is_collapsed, model_collapse).into_any_element(),
+                render_collapse_button(node_id, is_collapsed, move_list_state.clone())
+                    .into_any_element(),
             );
 
             // Only flush and render sub-variation block if expanded
@@ -287,16 +323,23 @@ fn render_variation_line(
                             .flex()
                             .flex_wrap()
                             .gap_1()
-                            .children(current_inline.drain(..).collect::<Vec<_>>())
+                            .children(mem::take(&mut current_inline))
                             .into_any_element(),
                     );
                 }
 
-                let sub_vars = game.get_sibling_sub_variations(node_id);
+                let sub_vars = get_sibling_sub_variations(game, node_id);
                 if !sub_vars.is_empty() {
                     segments.push(
-                        render_variations_block(model, &sub_vars, current_node_id, game)
-                            .into_any_element(),
+                        render_variations_block(
+                            model,
+                            move_list_state,
+                            &sub_vars,
+                            current_node_id,
+                            game,
+                            collapsed_variations,
+                        )
+                        .into_any_element(),
                     );
                 }
             }
@@ -341,13 +384,13 @@ fn render_clickable_move_node(
     // Build the display text with check/checkmate symbols
     let mut display_text = san;
     if is_checkmate {
-        display_text.push_str("#");
+        display_text.push('#');
     } else if is_check {
-        display_text.push_str("+");
+        display_text.push('+');
     }
 
     div()
-        .id(SharedString::from(format!("move-node-{}", node_id)))
+        .id(SharedString::from(format!("move-node-{node_id}")))
         .px_1()
         .rounded(px(3.0))
         .cursor_pointer()
@@ -367,19 +410,19 @@ fn render_clickable_move_node(
 fn render_collapse_button(
     node_id: MoveNodeId,
     is_collapsed: bool,
-    model: Entity<GameModel>,
+    move_list_state: Entity<MoveListState>,
 ) -> impl IntoElement {
     let symbol = if is_collapsed { "+" } else { "-" };
     div()
-        .id(SharedString::from(format!("collapse-{}", node_id)))
+        .id(SharedString::from(format!("collapse-{node_id}")))
         .px_1()
         .rounded(px(3.0))
         .cursor_pointer()
         .text_color(rgb(TEXT_SECONDARY))
         .hover(|s| s.bg(rgb(MOVE_HOVER_BG)))
         .on_click(move |_ev, _window, cx| {
-            model.update(cx, |game, cx| {
-                game.toggle_variation_collapse(node_id);
+            move_list_state.update(cx, |state, cx| {
+                state.toggle_variation(node_id);
                 cx.notify();
             });
         })
@@ -399,7 +442,7 @@ fn render_nav_button(
     };
 
     div()
-        .id(SharedString::from(format!("nav-{}", icon_path)))
+        .id(SharedString::from(format!("nav-{icon_path}")))
         .px_4()
         .py_2()
         .rounded(px(4.0))

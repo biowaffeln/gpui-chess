@@ -25,25 +25,6 @@ pub struct Piece {
     pub color: PieceColor,
 }
 
-impl Piece {
-    pub fn svg_path(&self) -> &'static str {
-        match (self.kind, self.color) {
-            (PieceKind::Pawn, PieceColor::White) => "assets/pawn-white.svg",
-            (PieceKind::Pawn, PieceColor::Black) => "assets/pawn-black.svg",
-            (PieceKind::Rook, PieceColor::White) => "assets/rook-white.svg",
-            (PieceKind::Rook, PieceColor::Black) => "assets/rook-black.svg",
-            (PieceKind::Knight, PieceColor::White) => "assets/knight-white.svg",
-            (PieceKind::Knight, PieceColor::Black) => "assets/knight-black.svg",
-            (PieceKind::Bishop, PieceColor::White) => "assets/bishop-white.svg",
-            (PieceKind::Bishop, PieceColor::Black) => "assets/bishop-black.svg",
-            (PieceKind::Queen, PieceColor::White) => "assets/queen-white.svg",
-            (PieceKind::Queen, PieceColor::Black) => "assets/queen-black.svg",
-            (PieceKind::King, PieceColor::White) => "assets/king-white.svg",
-            (PieceKind::King, PieceColor::Black) => "assets/king-black.svg",
-        }
-    }
-}
-
 /// Convert row/col (0-indexed, row 0 = rank 8) to shakmaty Square
 pub fn to_square(row: usize, col: usize) -> Square {
     let file = File::new(col as u32);

@@ -5,30 +5,94 @@ use gpui::{
     Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
 };
 use gpui_component::resizable::{h_resizable, resizable_panel};
+use std::collections::HashSet;
 
-use crate::models::{DragState, GameModel};
+use crate::domain::MoveNodeId;
+use crate::models::GameModel;
+use crate::ui::BoardLayout;
+use crate::ui::assets::piece_svg_path;
 use crate::ui::theme::{
     BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL, PANEL_BG,
 };
+use crate::ui::view_models::DragState;
 use crate::ui::views::render_move_list_panel;
 
 // Define navigation actions
 actions!(chess, [MoveBack, MoveForward, MoveToStart, MoveToEnd]);
 
+/// UI state for the board view (not part of game model)
+pub struct BoardViewState {
+    pub drag_state: Option<DragState>,
+}
+
+impl BoardViewState {
+    pub fn new() -> Self {
+        Self { drag_state: None }
+    }
+}
+
+/// Board layout state (entity so canvas can update it)
+pub struct BoardLayoutState {
+    pub layout: BoardLayout,
+}
+
+impl BoardLayoutState {
+    pub fn new() -> Self {
+        Self {
+            layout: BoardLayout::default(),
+        }
+    }
+}
+
+/// UI state model for move list (entity so it can be shared and updated)
+pub struct MoveListState {
+    pub collapsed_variations: HashSet<MoveNodeId>,
+}
+
+impl MoveListState {
+    pub fn new() -> Self {
+        Self {
+            collapsed_variations: HashSet::new(),
+        }
+    }
+
+    pub fn toggle_variation(&mut self, node_id: MoveNodeId) {
+        if self.collapsed_variations.contains(&node_id) {
+            self.collapsed_variations.remove(&node_id);
+        } else {
+            self.collapsed_variations.insert(node_id);
+        }
+    }
+}
+
 /// The main chess board view that observes a GameModel
 pub struct ChessBoardView {
     model: Entity<GameModel>,
+    pub view_state: BoardViewState,
+    layout_state: Entity<BoardLayoutState>,
+    move_list_state: Entity<MoveListState>,
     focus_handle: FocusHandle,
     _subscription: Subscription,
+    _layout_subscription: Subscription,
+    _move_list_subscription: Subscription,
 }
 
 impl ChessBoardView {
     pub fn new(model: Entity<GameModel>, cx: &mut Context<Self>) -> Self {
         let _subscription = cx.observe(&model, |_, _, cx| cx.notify());
+        let layout_state = cx.new(|_| BoardLayoutState::new());
+        let _layout_subscription = cx.observe(&layout_state, |_, _, cx| cx.notify());
+        let move_list_state = cx.new(|_| MoveListState::new());
+        let _move_list_subscription = cx.observe(&move_list_state, |_, _, cx| cx.notify());
         Self {
             model,
+            view_state: BoardViewState::new(),
+            layout_state,
+            move_list_state,
             focus_handle: cx.focus_handle(),
             _subscription,
+            _layout_subscription,
+            _move_list_subscription,
         }
     }
 }
@@ -36,18 +100,15 @@ impl ChessBoardView {
 impl Render for ChessBoardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.clone();
-        let model_down = model.clone();
-        let model_move = model.clone();
-        let model_up = model.clone();
-        let model_measure = model.clone();
 
         let game = self.model.read(cx);
-        let drag_state = game.drag_state;
+        let drag_state = self.view_state.drag_state;
         let dragging_from = drag_state.map(|d| (d.from_row, d.from_col));
 
         // Sizing based on measured panel dimensions
-        let square_size = game.square_size();
-        let piece_size = game.piece_size();
+        let layout = self.layout_state.read(cx).layout;
+        let square_size = layout.square_size();
+        let piece_size = layout.piece_size();
 
         // Floating piece follows cursor during drag
         let floating_piece = drag_state.map(|d| {
@@ -56,11 +117,11 @@ impl Render for ChessBoardView {
                 .left(px(d.mouse_x - piece_size / 2.0))
                 .top(px(d.mouse_y - piece_size / 2.0))
                 .size(px(piece_size))
-                .child(img(d.piece.svg_path()).size(px(piece_size)))
+                .child(img(piece_svg_path(&d.piece)).size(px(piece_size)))
         });
 
         // Board element with fixed size - always maintains 1:1 aspect ratio
-        let board_total_size = square_size * 8.0;
+        let board_total_size = layout.board_total_size();
 
         // Collect only pieces that exist with their positions
         let pieces: Vec<_> = (0..8)
@@ -85,13 +146,13 @@ impl Render for ChessBoardView {
             .rounded(radius);
 
         // Pieces absolutely positioned on the board
-        let piece_offset = (square_size - piece_size) / 2.0;
+        let piece_offset = layout.piece_offset();
         let piece_elements: Vec<_> = pieces
             .into_iter()
             .map(|(row, col, piece, is_being_dragged)| {
                 let x = col as f32 * square_size + piece_offset;
                 let y = row as f32 * square_size + piece_offset;
-                img(piece.svg_path())
+                img(piece_svg_path(&piece))
                     .absolute()
                     .left(px(x))
                     .top(px(y))
@@ -121,57 +182,62 @@ impl Render for ChessBoardView {
             // Mouse down: start drag if clicking on a piece
             .on_mouse_down(
                 MouseButton::Left,
-                move |ev: &MouseDownEvent, _window, cx| {
-                    model_down.update(cx, |game, cx| {
-                        let pos = ev.position;
-                        if let Some((row, col)) = game.pos_to_square(pos.x.into(), pos.y.into()) {
-                            if let Some(piece) = game.piece_at(row, col) {
-                                if piece.color == game.current_turn() {
-                                    game.drag_state = Some(DragState {
-                                        piece,
-                                        from_row: row,
-                                        from_col: col,
-                                        mouse_x: pos.x.into(),
-                                        mouse_y: pos.y.into(),
-                                    });
-                                    cx.notify();
-                                }
+                cx.listener(|view, ev: &MouseDownEvent, _window, cx| {
+                    let pos = ev.position;
+                    let game = view.model.read(cx);
+                    let layout = view.layout_state.read(cx).layout;
+
+                    if let Some((row, col)) = layout.pos_to_square(pos.x.into(), pos.y.into()) {
+                        if let Some(piece) = game.piece_at(row, col) {
+                            if piece.color == game.current_turn() {
+                                view.view_state.drag_state = Some(DragState {
+                                    piece,
+                                    from_row: row,
+                                    from_col: col,
+                                    mouse_x: pos.x.into(),
+                                    mouse_y: pos.y.into(),
+                                });
+                                cx.notify();
                             }
                         }
-                    });
-                },
+                    }
+                }),
             )
             // Mouse move: update drag position
-            .on_mouse_move(move |ev: &MouseMoveEvent, _, cx| {
-                model_move.update(cx, |game, cx| {
-                    if let Some(ref mut drag) = game.drag_state {
-                        drag.mouse_x = ev.position.x.into();
-                        drag.mouse_y = ev.position.y.into();
-                        cx.notify();
-                    }
-                });
-            })
+            .on_mouse_move(cx.listener(|view, ev: &MouseMoveEvent, _window, cx| {
+                if let Some(ref mut drag) = view.view_state.drag_state {
+                    drag.mouse_x = ev.position.x.into();
+                    drag.mouse_y = ev.position.y.into();
+                    cx.notify();
+                }
+            }))
             // Mouse up: complete the move
-            .on_mouse_up(MouseButton::Left, move |ev: &MouseUpEvent, _window, cx| {
-                model_up.update(cx, |game, cx| {
-                    if let Some(drag) = game.drag_state.take() {
-                        let pos = ev.position;
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, ev: &MouseUpEvent, _window, cx| {
+                    let pos = ev.position;
+
+                    if let Some(drag) = view.view_state.drag_state.take() {
+                        let layout = view.layout_state.read(cx).layout;
                         if let Some((to_row, to_col)) =
-                            game.pos_to_square(pos.x.into(), pos.y.into())
+                            layout.pos_to_square(pos.x.into(), pos.y.into())
                         {
-                            game.try_move((drag.from_row, drag.from_col), (to_row, to_col));
+                            view.model.update(cx, |game, _cx| {
+                                game.try_move((drag.from_row, drag.from_col), (to_row, to_col));
+                            });
                         }
                         cx.notify();
                     }
-                });
-            });
+                }),
+            );
 
         // Canvas to measure actual panel size
+        let layout_state = self.layout_state.clone();
         let measure_canvas = canvas(
             move |bounds, _window, cx| {
-                model_measure.update(cx, |game, cx| {
-                    if game.panel_size != bounds.size {
-                        game.panel_size = bounds.size;
+                layout_state.update(cx, |state, cx| {
+                    if state.layout.panel_size != bounds.size {
+                        state.layout = BoardLayout::new(bounds.size);
                         cx.notify();
                     }
                 });
@@ -191,7 +257,7 @@ impl Render for ChessBoardView {
             .child(board_panel_content);
 
         // Move list panel
-        let move_list_panel_content = render_move_list_panel(&model, cx);
+        let move_list_panel_content = render_move_list_panel(&model, &self.move_list_state, cx);
 
         // Clone model for each action handler
         let model_back = model.clone();

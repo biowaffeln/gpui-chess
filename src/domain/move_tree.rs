@@ -45,23 +45,6 @@ impl MoveNode {
         }
     }
 
-    /// Check if this is the root node
-    #[allow(dead_code)]
-    pub fn is_root(&self) -> bool {
-        self.parent_id.is_none()
-    }
-
-    /// Check if this node has any children
-    #[allow(dead_code)]
-    pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    /// Check if this node has variations (more than one child)
-    pub fn has_variations(&self) -> bool {
-        self.children.len() > 1
-    }
-
     /// Get the main line continuation (first child), if any
     pub fn main_line_child(&self) -> Option<MoveNodeId> {
         self.children.first().copied()
@@ -95,7 +78,7 @@ impl MoveNode {
         if ply == 0 {
             (0, false) // Root has no move number
         } else {
-            let move_num = (ply + 1) / 2;
+            let move_num = ply.div_ceil(2);
             let is_black = ply % 2 == 0; // ply 2, 4, 6... are black's moves
             (move_num, is_black)
         }
@@ -123,18 +106,6 @@ impl MoveTree {
     /// Get a node by ID
     pub fn get(&self, id: MoveNodeId) -> Option<&MoveNode> {
         self.nodes.get(id)
-    }
-
-    /// Get a mutable reference to a node by ID
-    #[allow(dead_code)]
-    pub fn get_mut(&mut self, id: MoveNodeId) -> Option<&mut MoveNode> {
-        self.nodes.get_mut(id)
-    }
-
-    /// Get the root node
-    #[allow(dead_code)]
-    pub fn root(&self) -> &MoveNode {
-        &self.nodes[0]
     }
 
     /// Get the currently viewed node
@@ -238,51 +209,6 @@ impl MoveTree {
         }
         line
     }
-
-    /// Get the path from root to current position
-    #[allow(dead_code)]
-    pub fn path_to_current(&self) -> Vec<MoveNodeId> {
-        let mut path = Vec::new();
-        let mut id = self.current_id;
-        loop {
-            path.push(id);
-            if let Some(parent_id) = self.nodes[id].parent_id {
-                id = parent_id;
-            } else {
-                break;
-            }
-        }
-        path.reverse();
-        path
-    }
-
-    /// Check if a node is on the main line
-    #[allow(dead_code)]
-    pub fn is_on_main_line(&self, id: MoveNodeId) -> bool {
-        self.main_line().contains(&id)
-    }
-
-    /// Get all nodes that have variations (useful for UI)
-    #[allow(dead_code)]
-    pub fn nodes_with_variations(&self) -> Vec<MoveNodeId> {
-        self.nodes
-            .iter()
-            .filter(|n| n.has_variations())
-            .map(|n| n.id)
-            .collect()
-    }
-
-    /// Get the total number of nodes
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
-    /// Check if tree is empty (only root)
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.nodes.len() == 1
-    }
 }
 
 impl Default for MoveTree {
@@ -298,7 +224,6 @@ mod tests {
     #[test]
     fn test_new_tree() {
         let tree = MoveTree::new();
-        assert_eq!(tree.len(), 1);
         assert!(tree.is_at_root());
         assert!(tree.is_at_leaf());
     }
@@ -363,9 +288,10 @@ mod tests {
         // Variation: d4
         tree.add_move(pos.clone(), "d4".to_string());
 
-        assert!(tree.root().has_variations());
-        assert_eq!(tree.root().children.len(), 2);
-        assert_eq!(tree.root().main_line_child(), Some(1)); // e4 is main line
-        assert_eq!(tree.root().variation_children(), &[2]); // d4 is variation
+        let root = tree.get(0).unwrap();
+        assert!(!root.variation_children().is_empty());
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.main_line_child(), Some(1)); // e4 is main line
+        assert_eq!(root.variation_children(), &[2]); // d4 is variation
     }
 }
