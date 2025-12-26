@@ -7,8 +7,9 @@ use gpui::{
 use gpui_component::resizable::{h_resizable, resizable_panel};
 
 use crate::models::{DragState, GameModel};
-use crate::ui::components::render_square;
-use crate::ui::theme::{BOARD_PADDING, INITIAL_LEFT_PANEL, PANEL_BG};
+use crate::ui::theme::{
+    BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL, PANEL_BG,
+};
 use crate::ui::views::render_move_list_panel;
 
 /// The main chess board view that observes a GameModel
@@ -56,32 +57,52 @@ impl Render for ChessBoardView {
         // Board element with fixed size - always maintains 1:1 aspect ratio
         let board_total_size = square_size * 8.0;
 
-        // Collect pieces for rendering (can't borrow game in closure)
+        // Collect only pieces that exist with their positions
         let pieces: Vec<_> = (0..8)
             .flat_map(|row| {
-                (0..8).map(move |col| {
-                    let piece = game.piece_at(row, col);
-                    let is_being_dragged = dragging_from == Some((row, col));
-                    (row, col, piece, is_being_dragged)
+                (0..8).filter_map(move |col| {
+                    game.piece_at(row, col).map(|piece| {
+                        let is_being_dragged = dragging_from == Some((row, col));
+                        (row, col, piece, is_being_dragged)
+                    })
                 })
             })
             .collect();
 
+        let radius = px(BOARD_CORNER_RADIUS);
+
+        // Board background image
+        let board_bg = img("assets/maple.jpg")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size(px(board_total_size))
+            .rounded(radius);
+
+        // Pieces absolutely positioned on the board
+        let piece_offset = (square_size - piece_size) / 2.0;
+        let piece_elements: Vec<_> = pieces
+            .into_iter()
+            .map(|(row, col, piece, is_being_dragged)| {
+                let x = col as f32 * square_size + piece_offset;
+                let y = row as f32 * square_size + piece_offset;
+                img(piece.svg_path())
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .size(px(piece_size))
+                    .when(is_being_dragged, |el| el.opacity(GHOST_OPACITY))
+            })
+            .collect();
+
+        // Combined board with background + pieces
         let board = div()
+            .relative()
             .flex_shrink_0()
-            .flex()
-            .flex_col()
             .w(px(board_total_size))
             .h(px(board_total_size))
-            .overflow_hidden()
-            .rounded_md()
-            .children((0..8).map(|row| {
-                div().flex().flex_shrink_0().children((0..8).map(|col| {
-                    let idx = row * 8 + col;
-                    let (_, _, piece, is_being_dragged) = pieces[idx];
-                    render_square(row, col, piece, is_being_dragged, square_size, piece_size)
-                }))
-            }));
+            .child(board_bg)
+            .children(piece_elements);
 
         let board_panel_content = div()
             .id("board-panel")
