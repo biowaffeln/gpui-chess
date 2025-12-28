@@ -187,6 +187,8 @@ pub struct UciInfo {
     pub time: Option<u64>,
     /// Principal variation (best line) as UCI moves
     pub pv: Vec<String>,
+    /// Principal variation formatted as SAN with move numbers (pre-computed)
+    pub pv_san: String,
     /// Current move being searched
     pub currmove: Option<String>,
     /// Current move number
@@ -207,6 +209,7 @@ impl UciInfo {
             nps: None,
             time: None,
             pv: Vec::new(),
+            pv_san: String::new(),
             currmove: None,
             currmovenumber: None,
             hashfull: None,
@@ -338,6 +341,98 @@ impl UciInfo {
     /// Check if this info line has meaningful analysis data (depth + score + pv)
     pub fn has_analysis(&self) -> bool {
         self.depth.is_some() && self.score.is_some() && !self.pv.is_empty()
+    }
+
+    /// Compute and store the SAN representation of the PV given a FEN
+    pub fn compute_pv_san(&mut self, fen: &str) {
+        use shakmaty::fen::Fen;
+        use shakmaty::san::San;
+        use shakmaty::uci::UciMove;
+        use shakmaty::{CastlingMode, Chess, Position};
+
+        if self.pv.is_empty() {
+            self.pv_san = "...".to_string();
+            return;
+        }
+
+        let Ok(parsed_fen) = fen.parse::<Fen>() else {
+            self.pv_san = self.format_pv_uci();
+            return;
+        };
+
+        let Ok(mut position) = parsed_fen.into_position::<Chess>(CastlingMode::Standard) else {
+            self.pv_san = self.format_pv_uci();
+            return;
+        };
+
+        let mut fullmove_number = position.fullmoves().get();
+        let mut is_black_turn = position.turn() == shakmaty::Color::Black;
+
+        let mut result = String::new();
+        let mut first_move = true;
+        let moves_to_show = self.pv.iter().take(8);
+
+        for uci_str in moves_to_show {
+            let Ok(uci) = uci_str.parse::<UciMove>() else {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(uci_str);
+                continue;
+            };
+
+            let Ok(mov) = uci.to_move(&position) else {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(uci_str);
+                continue;
+            };
+
+            // Add move number prefix
+            if !is_black_turn {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(&format!("{}.", fullmove_number));
+            } else if first_move {
+                result.push_str(&format!("{}...", fullmove_number));
+            }
+
+            if !result.is_empty() && !result.ends_with(' ') {
+                result.push(' ');
+            }
+
+            let san = San::from_move(&position, mov.clone());
+            result.push_str(&san.to_string());
+
+            if is_black_turn {
+                fullmove_number += 1;
+            }
+            is_black_turn = !is_black_turn;
+            first_move = false;
+
+            match position.play(mov) {
+                Ok(new_pos) => position = new_pos,
+                Err(_) => break,
+            }
+        }
+
+        if self.pv.len() > 8 {
+            result.push_str(" ...");
+        }
+
+        self.pv_san = result;
+    }
+
+    /// Format PV as UCI notation (fallback)
+    fn format_pv_uci(&self) -> String {
+        let display_moves: Vec<&str> = self.pv.iter().take(8).map(|s| s.as_str()).collect();
+        let mut result = display_moves.join(" ");
+        if self.pv.len() > 8 {
+            result.push_str(" ...");
+        }
+        result
     }
 }
 

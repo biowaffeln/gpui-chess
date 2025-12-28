@@ -26,10 +26,14 @@ const ENGINE_PATH: &str = "/opt/homebrew/bin/stockfish";
 const MAX_OUTPUT_LINES: usize = 100;
 
 /// Default number of principal variations to request from engine
-const DEFAULT_MULTI_PV: u32 = 3;
+const DEFAULT_MULTI_PV: u32 = 1;
 
-/// Default number of threads to use
-const DEFAULT_THREADS: u32 = 1;
+/// Get default number of threads based on system CPU count
+fn default_threads() -> u32 {
+    std::thread::available_parallelism()
+        .map(|p| p.get() as u32)
+        .unwrap_or(8)
+}
 
 /// Maximum number of principal variations
 const MAX_MULTI_PV: u32 = 5;
@@ -74,6 +78,8 @@ pub struct EngineModel {
     multi_pv: u32,
     /// Number of threads to use
     threads: u32,
+    /// Whether to show raw output
+    show_uci_output: bool,
 }
 
 impl EngineModel {
@@ -90,7 +96,8 @@ impl EngineModel {
             process: None,
             _poll_task: None,
             multi_pv: DEFAULT_MULTI_PV,
-            threads: DEFAULT_THREADS,
+            threads: default_threads(),
+            show_uci_output: false,
         }
     }
 
@@ -112,7 +119,8 @@ impl EngineModel {
     /// Get all analysis lines sorted by multipv number (filtered by current multi_pv setting)
     pub fn analysis_lines(&self) -> Vec<&UciInfo> {
         let multi_pv = self.multi_pv;
-        let mut lines: Vec<_> = self.analysis_lines
+        let mut lines: Vec<_> = self
+            .analysis_lines
             .iter()
             .filter(|(k, _)| **k <= multi_pv)
             .map(|(_, v)| v)
@@ -164,6 +172,16 @@ impl EngineModel {
         }
     }
 
+    /// Check if raw output is shown
+    pub fn show_uci_output(&self) -> bool {
+        self.show_uci_output
+    }
+
+    /// Toggle raw output visibility
+    pub fn toggle_uci_output(&mut self) {
+        self.show_uci_output = !self.show_uci_output;
+    }
+
     /// Apply current engine settings (MultiPV and Threads)
     fn apply_engine_settings(&mut self) {
         if !self.running {
@@ -202,7 +220,7 @@ impl EngineModel {
     }
 
     /// Start the engine process
-    /// 
+    ///
     /// Must be called from a Context<EngineModel> to spawn the background polling task.
     pub fn start(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         if self.running {
@@ -264,21 +282,23 @@ impl EngineModel {
         self.running = true;
 
         // Spawn background polling task that pushes events to the UI
-        let poll_task = cx.spawn(async move |weak_entity: WeakEntity<EngineModel>, cx: &mut AsyncApp| {
-            Self::run_event_loop(weak_entity, cx).await;
-        });
+        let poll_task = cx.spawn(
+            async move |weak_entity: WeakEntity<EngineModel>, cx: &mut AsyncApp| {
+                Self::run_event_loop(weak_entity, cx).await;
+            },
+        );
         self._poll_task = Some(poll_task);
 
         // Initialize UCI
         self.send_command(UciCommand::Uci);
         self.send_command(UciCommand::IsReady);
-        
+
         // Set MultiPV option
         self.send_command(UciCommand::SetOption {
             name: "MultiPV".to_string(),
             value: self.multi_pv.to_string(),
         });
-        
+
         // Set Threads option
         self.send_command(UciCommand::SetOption {
             name: "Threads".to_string(),
@@ -289,37 +309,37 @@ impl EngineModel {
 
         Ok(())
     }
-    
+
     /// Background event loop that polls the channel and updates the model
     async fn run_event_loop(weak_entity: WeakEntity<EngineModel>, cx: &mut AsyncApp) {
         const POLL_INTERVAL: Duration = Duration::from_millis(16); // ~60fps
-        
+
         loop {
             // Small delay to avoid busy-waiting
             cx.background_executor().timer(POLL_INTERVAL).await;
-            
+
             // Try to update the entity - if it's gone, exit the loop
             let should_continue = weak_entity.update(cx, |engine, cx| {
                 if !engine.running {
                     return false;
                 }
-                
+
                 // Drain all available events from the channel
                 let had_events = engine.process_pending_events();
                 if had_events {
                     cx.notify(); // Trigger UI re-render
                 }
-                
+
                 true
             });
-            
+
             match should_continue {
                 Ok(true) => continue,
                 _ => break, // Engine stopped or entity dropped
             }
         }
     }
-    
+
     /// Process all pending events from the channel
     /// Returns true if any events were processed
     fn process_pending_events(&mut self) -> bool {
@@ -337,7 +357,7 @@ impl EngineModel {
         if events.is_empty() {
             return false;
         }
-        
+
         for event in events {
             match event {
                 EngineEvent::Output(line) => {
@@ -374,7 +394,7 @@ impl EngineModel {
         // Clean up channels (this will cause the polling loop to exit)
         self.command_sender = None;
         self.event_receiver = None;
-        
+
         // Drop the poll task (it will exit on next iteration when it sees running=false)
         self._poll_task = None;
 
@@ -387,6 +407,7 @@ impl EngineModel {
         self.running = false;
         self.analyzing = false;
         self.current_fen = None; // Clear so analysis restarts when engine is started again
+        // Keep last_analyzed_fen so the last analysis can still be displayed in SAN notation
         self.add_output("[Engine stopped]".to_string());
     }
 
@@ -403,10 +424,11 @@ impl EngineModel {
 
         self.current_fen = Some(fen.to_string());
         self.analysis_lines.clear(); // Clear previous analysis
-        
+
         // Parse side to move from FEN (second field)
         // FEN format: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-        self.black_to_move = fen.split_whitespace()
+        self.black_to_move = fen
+            .split_whitespace()
             .nth(1)
             .map(|s| s == "b")
             .unwrap_or(false);
@@ -445,9 +467,13 @@ impl EngineModel {
 
         // If this is an info line, try to parse it and update analysis
         if let UciOutputKind::Info(info_str) = &output.kind {
-            let info = UciInfo::parse(info_str);
+            let mut info = UciInfo::parse(info_str);
             // Only update if this has meaningful analysis (depth + score + pv)
             if info.has_analysis() {
+                // Pre-compute SAN notation if we have a FEN
+                if let Some(fen) = &self.current_fen {
+                    info.compute_pv_san(fen);
+                }
                 let pv_num = info.multipv.unwrap_or(1);
                 self.analysis_lines.insert(pv_num, info);
             }

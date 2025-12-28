@@ -1,9 +1,10 @@
 //! Engine analysis pane - displays UCI engine output with start/stop control.
 
 use gpui::{App, Corner, Entity, SharedString, Window, div, prelude::*, px, rgb};
+
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::IconName;
+use gpui_component::{IconName, Sizable};
 
 use crate::domain::uci::{Score, UciInfo};
 use crate::models::EngineModel;
@@ -23,15 +24,19 @@ const EVAL_MATE: u32 = 0xfbbf24; // yellow/gold - mate
 
 /// Render the engine analysis pane.
 /// Shows parsed analysis (eval, depth, PV) and raw output below.
-pub fn render_engine_pane(engine_model: &Entity<EngineModel>, _window: &Window, cx: &App) -> impl IntoElement {
+pub fn render_engine_pane(
+    engine_model: &Entity<EngineModel>,
+    _window: &Window,
+    cx: &App,
+) -> impl IntoElement {
     let engine = engine_model.read(cx);
     let is_running = engine.is_running();
-    let is_analyzing = engine.is_analyzing();
     let analysis_lines = engine.analysis_lines();
     let black_to_move = engine.is_black_to_move();
     let output_lines = engine.output_lines();
     let multi_pv = engine.multi_pv();
     let threads = engine.threads();
+    let show_uci_output = engine.show_uci_output();
 
     // Start/Stop button
     let engine_model_clone = engine_model.clone();
@@ -67,27 +72,35 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, _window: &Window, 
     // Threads dropdown
     let threads_control = render_threads_control(engine_model, threads);
 
-    // Status indicator
-    let status_text = if is_running {
-        if is_analyzing {
-            "Analyzing..."
-        } else {
-            "Ready"
-        }
-    } else {
-        "Stopped"
-    };
-
-    let status_color = if is_running { EVAL_POSITIVE } else { 0xf87171 };
+    // Get depth and nps from first analysis line for header display
+    let header_depth = analysis_lines.first().and_then(|info| info.depth);
+    let header_nps = analysis_lines.first().and_then(|info| info.nps);
 
     // Build the analysis display section
     let analysis_section = render_analysis_section(&analysis_lines, black_to_move, is_running);
 
-    // Build the raw output section
-    let raw_output_section = render_raw_output_section(output_lines);
+    // Raw output toggle button
+    let engine_model_raw = engine_model.clone();
+    let uci_output_toggle = Button::new("toggle-raw-output")
+        .label("UCI")
+        .ghost()
+        .xsmall()
+        .text_color(rgb(TEXT_SECONDARY))
+        .on_click(move |_, _, cx| {
+            engine_model_raw.update(cx, |engine, cx| {
+                engine.toggle_uci_output();
+                cx.notify();
+            });
+        });
+
+    // Build the raw output section (only if visible)
+    let uci_output_section = if show_uci_output {
+        Some(render_uci_output_section(output_lines))
+    } else {
+        None
+    };
 
     let engine_pane = div()
-        .flex_1()
         .min_h_0()
         .flex()
         .flex_col()
@@ -116,14 +129,24 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, _window: &Window, 
                             div()
                                 .text_color(rgb(TEXT_PRIMARY))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Engine"),
+                                .child("Stockfish"),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(status_color))
-                                .child(status_text),
-                        ),
+                        .when_some(header_depth, |el, depth| {
+                            el.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .child(format!("depth {}", depth)),
+                            )
+                        })
+                        .when_some(header_nps, |el, nps| {
+                            el.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .child(format!("{}", format_nps(nps))),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -132,13 +155,13 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, _window: &Window, 
                         .gap_3()
                         .child(lines_control)
                         .child(threads_control)
-                        .child(toggle_button),
+                        .child(toggle_button)
+                        .child(div().flex_1().flex().justify_end().child(uci_output_toggle)),
                 ),
         )
         // Analysis section (shows all PV lines)
         .child(analysis_section)
-        // Raw output section (scrollable, takes remaining space)
-        .child(raw_output_section);
+        .when_some(uci_output_section, |el, section| el.child(section));
 
     div()
         .size_full()
@@ -156,7 +179,7 @@ fn render_lines_control(
     current_lines: u32,
 ) -> impl IntoElement {
     let engine_model = engine_model.clone();
-    
+
     div()
         .flex()
         .items_center()
@@ -185,14 +208,18 @@ fn render_lines_control(
                         let engine_model = engine_model.clone();
                         let is_selected = line_count == current_lines;
                         m = m.item(
-                            PopupMenuItem::new(format!("{} {}", line_count, if line_count == 1 { "line" } else { "lines" }))
-                                .checked(is_selected)
-                                .on_click(move |_ev, _window, cx| {
-                                    engine_model.update(cx, |engine, cx| {
-                                        engine.set_multi_pv(line_count);
-                                        cx.notify();
-                                    });
-                                }),
+                            PopupMenuItem::new(format!(
+                                "{} {}",
+                                line_count,
+                                if line_count == 1 { "line" } else { "lines" }
+                            ))
+                            .checked(is_selected)
+                            .on_click(move |_ev, _window, cx| {
+                                engine_model.update(cx, |engine, cx| {
+                                    engine.set_multi_pv(line_count);
+                                    cx.notify();
+                                });
+                            }),
                         );
                     }
                     m
@@ -206,7 +233,7 @@ fn render_threads_control(
     current_threads: u32,
 ) -> impl IntoElement {
     let engine_model = engine_model.clone();
-    
+
     div()
         .flex()
         .items_center()
@@ -235,14 +262,18 @@ fn render_threads_control(
                         let engine_model = engine_model.clone();
                         let is_selected = thread_count == current_threads;
                         m = m.item(
-                            PopupMenuItem::new(format!("{} {}", thread_count, if thread_count == 1 { "core" } else { "cores" }))
-                                .checked(is_selected)
-                                .on_click(move |_ev, _window, cx| {
-                                    engine_model.update(cx, |engine, cx| {
-                                        engine.set_threads(thread_count);
-                                        cx.notify();
-                                    });
-                                }),
+                            PopupMenuItem::new(format!(
+                                "{} {}",
+                                thread_count,
+                                if thread_count == 1 { "core" } else { "cores" }
+                            ))
+                            .checked(is_selected)
+                            .on_click(move |_ev, _window, cx| {
+                                engine_model.update(cx, |engine, cx| {
+                                    engine.set_threads(thread_count);
+                                    cx.notify();
+                                });
+                            }),
                         );
                     }
                     m
@@ -276,89 +307,25 @@ fn render_analysis_section(
             .child("Start engine to analyze position")
     };
 
-    div()
-        .flex_shrink_0()
-        .px_4()
-        .py_3()
-        .border_b_1()
-        .border_color(rgb(BORDER_COLOR))
-        .child(content)
+    div().flex_shrink_0().px_4().py_3().child(content)
 }
 
 /// Render a single PV line
 fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::Div {
     let (eval_text, eval_color) = format_evaluation(info.score, black_to_move);
-    let pv_text = format_pv(&info.pv);
+    let pv_text = if info.pv_san.is_empty() {
+        "...".to_string()
+    } else {
+        info.pv_san.clone()
+    };
 
     if is_best {
-        // Best line gets prominent display
-        let depth_text = format_depth(info.depth, info.seldepth);
-        let stats_text = format_stats(info);
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            // Top row: Evaluation + Depth + Stats
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    // Large evaluation display
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(eval_color))
-                            .child(eval_text),
-                    )
-                    // Depth display
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(TEXT_SECONDARY))
-                                    .child("Depth"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(TEXT_PRIMARY))
-                                    .child(depth_text),
-                            ),
-                    )
-                    // Stats (nodes/nps)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(TEXT_SECONDARY))
-                            .child(stats_text),
-                    ),
-            )
-            // Principal variation
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(TEXT_PRIMARY))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(pv_text),
-            )
-    } else {
-        // Secondary lines get compact display
+        // First line gets uniform display with eval
         div()
             .flex()
             .items_center()
             .gap_2()
-            .pt_1()
-            .border_t_1()
-            .border_color(rgb(BORDER_COLOR))
-            // Eval (smaller)
+            // Eval
             .child(
                 div()
                     .w(px(60.))
@@ -371,8 +338,36 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
             .child(
                 div()
                     .flex_1()
-                    .text_xs()
-                    .text_color(rgb(TEXT_SECONDARY))
+                    .text_sm()
+                    .text_color(rgb(TEXT_PRIMARY))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(pv_text),
+            )
+    } else {
+        // Secondary lines get uniform display with eval
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .pt_1()
+            .border_t_1()
+            .border_color(rgb(BORDER_COLOR))
+            // Eval
+            .child(
+                div()
+                    .w(px(60.))
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(eval_color))
+                    .child(eval_text),
+            )
+            // PV
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(rgb(TEXT_PRIMARY))
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(pv_text),
@@ -381,7 +376,7 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
 }
 
 /// Render the raw output section
-fn render_raw_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> impl IntoElement {
+fn render_uci_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> impl IntoElement {
     let content = if output_lines.is_empty() {
         div()
             .text_color(rgb(TEXT_SECONDARY))
@@ -411,19 +406,8 @@ fn render_raw_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> 
         .flex()
         .flex_col()
         .overflow_hidden()
-        // Section header
-        .child(
-            div()
-                .flex_shrink_0()
-                .px_4()
-                .py_1()
-                .text_xs()
-                .text_color(rgb(TEXT_SECONDARY))
-                .border_b_1()
-                .border_color(rgb(BORDER_COLOR))
-                .child("Raw Output"),
-        )
-        // Scrollable content
+        .border_t_1()
+        .border_color(rgb(BORDER_COLOR))
         .child(
             div()
                 .id("engine-raw-output-scroll")
@@ -477,60 +461,13 @@ fn format_evaluation(score: Option<Score>, black_to_move: bool) -> (String, u32)
     }
 }
 
-/// Format depth for display
-fn format_depth(depth: Option<u32>, seldepth: Option<u32>) -> String {
-    match (depth, seldepth) {
-        (Some(d), Some(sd)) => format!("{}/{}", d, sd),
-        (Some(d), None) => format!("{}", d),
-        _ => "--".to_string(),
-    }
-}
-
-/// Format the principal variation for display
-fn format_pv(pv: &[String]) -> String {
-    if pv.is_empty() {
-        return "...".to_string();
-    }
-
-    // Show first several moves, join with spaces
-    let display_moves: Vec<&str> = pv.iter().take(8).map(|s| s.as_str()).collect();
-    let mut result = display_moves.join(" ");
-
-    if pv.len() > 8 {
-        result.push_str(" ...");
-    }
-
-    result
-}
-
-/// Format search statistics
-fn format_stats(info: &UciInfo) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(nodes) = info.nodes {
-        parts.push(format_nodes(nodes));
-    }
-
-    if let Some(nps) = info.nps {
-        parts.push(format!("{}/s", format_nodes(nps)));
-    }
-
-    if parts.is_empty() {
-        return String::new();
-    }
-
-    parts.join(" | ")
-}
-
-/// Format large numbers with K/M/B suffixes
-fn format_nodes(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}B", n as f64 / 1_000_000_000.0)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
+/// Format nodes per second with K/M/B suffixes
+fn format_nps(nps: u64) -> String {
+    if nps >= 1_000_000 {
+        format!("{:.1}M nps", nps as f64 / 1_000_000.0)
+    } else if nps >= 1_000 {
+        format!("{:.1}K nps", nps as f64 / 1_000.0)
     } else {
-        format!("{}", n)
+        format!("{} nps", nps)
     }
 }
