@@ -106,11 +106,6 @@ impl EngineModel {
         self.running
     }
 
-    /// Check if the engine is currently analyzing
-    pub fn is_analyzing(&self) -> bool {
-        self.analyzing
-    }
-
     /// Get the output lines for display
     pub fn output_lines(&self) -> &[UciOutput] {
         &self.output_lines

@@ -17,7 +17,10 @@ pub enum UciCommand {
     /// Set an engine option
     SetOption { name: String, value: String },
     /// Set position (startpos or FEN, with optional moves)
-    Position { fen: Option<String>, moves: Vec<String> },
+    Position {
+        fen: Option<String>,
+        moves: Vec<String>,
+    },
     /// Start infinite analysis
     GoInfinite,
     /// Start analysis with depth limit
@@ -85,7 +88,7 @@ impl UciOutputKind {
     /// Parse a raw UCI output line into a categorized type
     pub fn parse(line: &str) -> Self {
         let line = line.trim();
-        
+
         if line == "uciok" {
             UciOutputKind::UciOk
         } else if line == "readyok" {
@@ -321,9 +324,19 @@ impl UciInfo {
                         // Stop if we hit another keyword
                         if matches!(
                             tokens[i],
-                            "depth" | "seldepth" | "multipv" | "score" | "nodes" 
-                            | "nps" | "time" | "hashfull" | "currmove" | "currmovenumber"
-                            | "string" | "refutation" | "currline"
+                            "depth"
+                                | "seldepth"
+                                | "multipv"
+                                | "score"
+                                | "nodes"
+                                | "nps"
+                                | "time"
+                                | "hashfull"
+                                | "currmove"
+                                | "currmovenumber"
+                                | "string"
+                                | "refutation"
+                                | "currline"
                         ) {
                             break;
                         }
@@ -442,7 +455,10 @@ mod tests {
 
     #[test]
     fn test_position_startpos() {
-        let cmd = UciCommand::Position { fen: None, moves: vec![] };
+        let cmd = UciCommand::Position {
+            fen: None,
+            moves: vec![],
+        };
         assert_eq!(cmd.to_uci_string(), "position startpos");
     }
 
@@ -482,7 +498,8 @@ mod tests {
     // UciInfo parsing tests
     #[test]
     fn test_parse_uci_info_basic() {
-        let info = UciInfo::parse("depth 20 score cp 35 nodes 1234567 nps 2500000 pv e2e4 e7e5 g1f3");
+        let info =
+            UciInfo::parse("depth 20 score cp 35 nodes 1234567 nps 2500000 pv e2e4 e7e5 g1f3");
         assert_eq!(info.depth, Some(20));
         assert_eq!(info.score, Some(Score::Centipawns(35)));
         assert_eq!(info.nodes, Some(1234567));
@@ -609,7 +626,7 @@ mod tests {
     fn test_parse_stockfish_real_output() {
         // Real Stockfish output example
         let info = UciInfo::parse(
-            "depth 24 seldepth 31 multipv 1 score cp 28 nodes 2847613 nps 2431482 hashfull 457 time 1171 pv e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1"
+            "depth 24 seldepth 31 multipv 1 score cp 28 nodes 2847613 nps 2431482 hashfull 457 time 1171 pv e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1",
         );
         assert_eq!(info.depth, Some(24));
         assert_eq!(info.seldepth, Some(31));
