@@ -25,8 +25,17 @@ const ENGINE_PATH: &str = "/opt/homebrew/bin/stockfish";
 /// Maximum number of output lines to keep in history
 const MAX_OUTPUT_LINES: usize = 100;
 
-/// Number of principal variations to request from engine
-const MULTI_PV: u32 = 3;
+/// Default number of principal variations to request from engine
+const DEFAULT_MULTI_PV: u32 = 3;
+
+/// Default number of threads to use
+const DEFAULT_THREADS: u32 = 1;
+
+/// Maximum number of principal variations
+const MAX_MULTI_PV: u32 = 5;
+
+/// Minimum number of principal variations
+const MIN_MULTI_PV: u32 = 1;
 
 /// Messages sent from the engine reader thread to the model
 #[derive(Debug)]
@@ -61,6 +70,10 @@ pub struct EngineModel {
     process: Option<Child>,
     /// Background polling task (kept alive while engine is running)
     _poll_task: Option<Task<()>>,
+    /// Number of principal variations to show
+    multi_pv: u32,
+    /// Number of threads to use
+    threads: u32,
 }
 
 impl EngineModel {
@@ -76,6 +89,8 @@ impl EngineModel {
             command_sender: None,
             process: None,
             _poll_task: None,
+            multi_pv: DEFAULT_MULTI_PV,
+            threads: DEFAULT_THREADS,
         }
     }
 
@@ -94,9 +109,14 @@ impl EngineModel {
         &self.output_lines
     }
 
-    /// Get all analysis lines sorted by multipv number
+    /// Get all analysis lines sorted by multipv number (filtered by current multi_pv setting)
     pub fn analysis_lines(&self) -> Vec<&UciInfo> {
-        let mut lines: Vec<_> = self.analysis_lines.values().collect();
+        let multi_pv = self.multi_pv;
+        let mut lines: Vec<_> = self.analysis_lines
+            .iter()
+            .filter(|(k, _)| **k <= multi_pv)
+            .map(|(_, v)| v)
+            .collect();
         lines.sort_by_key(|info| info.multipv.unwrap_or(1));
         lines
     }
@@ -115,6 +135,70 @@ impl EngineModel {
     /// Get the current FEN being analyzed (if any)
     pub fn current_fen(&self) -> Option<&str> {
         self.current_fen.as_deref()
+    }
+
+    /// Get the current number of principal variations
+    pub fn multi_pv(&self) -> u32 {
+        self.multi_pv
+    }
+
+    /// Get the current number of threads
+    pub fn threads(&self) -> u32 {
+        self.threads
+    }
+
+    /// Set the number of principal variations (1-5)
+    pub fn set_multi_pv(&mut self, multi_pv: u32) {
+        let clamped = multi_pv.clamp(MIN_MULTI_PV, MAX_MULTI_PV);
+        if clamped != self.multi_pv {
+            self.multi_pv = clamped;
+            self.apply_engine_settings();
+        }
+    }
+
+    /// Set the number of threads
+    pub fn set_threads(&mut self, threads: u32) {
+        if threads >= 1 && threads != self.threads {
+            self.threads = threads;
+            self.apply_engine_settings();
+        }
+    }
+
+    /// Apply current engine settings (MultiPV and Threads)
+    fn apply_engine_settings(&mut self) {
+        if !self.running {
+            return;
+        }
+
+        // Need to stop analysis, change settings, then restart
+        let was_analyzing = self.analyzing;
+        let current_fen = self.current_fen.clone();
+
+        if was_analyzing {
+            self.send_command(UciCommand::Stop);
+        }
+
+        // Apply settings
+        self.send_command(UciCommand::SetOption {
+            name: "MultiPV".to_string(),
+            value: self.multi_pv.to_string(),
+        });
+        self.send_command(UciCommand::SetOption {
+            name: "Threads".to_string(),
+            value: self.threads.to_string(),
+        });
+
+        // Restart analysis if it was running
+        if was_analyzing {
+            if let Some(fen) = current_fen {
+                self.analysis_lines.clear();
+                self.send_command(UciCommand::Position {
+                    fen: Some(fen),
+                    moves: vec![],
+                });
+                self.send_command(UciCommand::GoInfinite);
+            }
+        }
     }
 
     /// Start the engine process
@@ -192,7 +276,13 @@ impl EngineModel {
         // Set MultiPV option
         self.send_command(UciCommand::SetOption {
             name: "MultiPV".to_string(),
-            value: MULTI_PV.to_string(),
+            value: self.multi_pv.to_string(),
+        });
+        
+        // Set Threads option
+        self.send_command(UciCommand::SetOption {
+            name: "Threads".to_string(),
+            value: self.threads.to_string(),
         });
 
         self.add_output("[Engine started]".to_string());
@@ -296,6 +386,7 @@ impl EngineModel {
 
         self.running = false;
         self.analyzing = false;
+        self.current_fen = None; // Clear so analysis restarts when engine is started again
         self.add_output("[Engine stopped]".to_string());
     }
 

@@ -1,13 +1,18 @@
 //! Engine analysis pane - displays UCI engine output with start/stop control.
 
-use gpui::{App, Entity, SharedString, div, prelude::*, px, rgb};
+use gpui::{App, Corner, Entity, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_component::IconName;
 
 use crate::domain::uci::{Score, UciInfo};
 use crate::models::EngineModel;
 use crate::ui::theme::{
     BOARD_PADDING, BORDER_COLOR, MOVE_LIST_BG, PANEL_BG, TEXT_PRIMARY, TEXT_SECONDARY,
 };
+
+/// Available thread count options
+const THREAD_OPTIONS: &[u32] = &[1, 2, 4, 6, 8];
 
 // Colors for evaluation display
 const EVAL_POSITIVE: u32 = 0x4ade80; // green - white advantage
@@ -18,13 +23,15 @@ const EVAL_MATE: u32 = 0xfbbf24; // yellow/gold - mate
 
 /// Render the engine analysis pane.
 /// Shows parsed analysis (eval, depth, PV) and raw output below.
-pub fn render_engine_pane(engine_model: &Entity<EngineModel>, cx: &App) -> impl IntoElement {
+pub fn render_engine_pane(engine_model: &Entity<EngineModel>, _window: &Window, cx: &App) -> impl IntoElement {
     let engine = engine_model.read(cx);
     let is_running = engine.is_running();
     let is_analyzing = engine.is_analyzing();
     let analysis_lines = engine.analysis_lines();
     let black_to_move = engine.is_black_to_move();
     let output_lines = engine.output_lines();
+    let multi_pv = engine.multi_pv();
+    let threads = engine.threads();
 
     // Start/Stop button
     let engine_model_clone = engine_model.clone();
@@ -53,6 +60,12 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, cx: &App) -> impl 
                 });
             })
     };
+
+    // MultiPV dropdown
+    let lines_control = render_lines_control(engine_model, multi_pv);
+
+    // Threads dropdown
+    let threads_control = render_threads_control(engine_model, threads);
 
     // Status indicator
     let status_text = if is_running {
@@ -112,7 +125,15 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, cx: &App) -> impl 
                                 .child(status_text),
                         ),
                 )
-                .child(toggle_button),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(lines_control)
+                        .child(threads_control)
+                        .child(toggle_button),
+                ),
         )
         // Analysis section (shows all PV lines)
         .child(analysis_section)
@@ -127,6 +148,106 @@ pub fn render_engine_pane(engine_model: &Entity<EngineModel>, cx: &App) -> impl 
         .bg(rgb(PANEL_BG))
         .p(px(BOARD_PADDING))
         .child(engine_pane)
+}
+
+/// Render the lines (MultiPV) control dropdown
+fn render_lines_control(
+    engine_model: &Entity<EngineModel>,
+    current_lines: u32,
+) -> impl IntoElement {
+    let engine_model = engine_model.clone();
+    
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(TEXT_SECONDARY))
+                .child("Lines"),
+        )
+        .child(
+            Button::new("lines-dropdown")
+                .ghost()
+                .compact()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(format!("{}", current_lines))
+                        .child(IconName::ChevronDown),
+                )
+                .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _window, _cx| {
+                    let mut m = menu;
+                    for line_count in 1..=5u32 {
+                        let engine_model = engine_model.clone();
+                        let is_selected = line_count == current_lines;
+                        m = m.item(
+                            PopupMenuItem::new(format!("{} {}", line_count, if line_count == 1 { "line" } else { "lines" }))
+                                .checked(is_selected)
+                                .on_click(move |_ev, _window, cx| {
+                                    engine_model.update(cx, |engine, cx| {
+                                        engine.set_multi_pv(line_count);
+                                        cx.notify();
+                                    });
+                                }),
+                        );
+                    }
+                    m
+                }),
+        )
+}
+
+/// Render the threads control dropdown
+fn render_threads_control(
+    engine_model: &Entity<EngineModel>,
+    current_threads: u32,
+) -> impl IntoElement {
+    let engine_model = engine_model.clone();
+    
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(TEXT_SECONDARY))
+                .child("Cores"),
+        )
+        .child(
+            Button::new("threads-dropdown")
+                .ghost()
+                .compact()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(format!("{}", current_threads))
+                        .child(IconName::ChevronDown),
+                )
+                .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _window, _cx| {
+                    let mut m = menu;
+                    for &thread_count in THREAD_OPTIONS {
+                        let engine_model = engine_model.clone();
+                        let is_selected = thread_count == current_threads;
+                        m = m.item(
+                            PopupMenuItem::new(format!("{} {}", thread_count, if thread_count == 1 { "core" } else { "cores" }))
+                                .checked(is_selected)
+                                .on_click(move |_ev, _window, cx| {
+                                    engine_model.update(cx, |engine, cx| {
+                                        engine.set_threads(thread_count);
+                                        cx.notify();
+                                    });
+                                }),
+                        );
+                    }
+                    m
+                }),
+        )
 }
 
 /// Render the main analysis display (all PV lines)

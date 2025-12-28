@@ -159,7 +159,7 @@ impl ChessBoardView {
 }
 
 impl Render for ChessBoardView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.clone();
         let engine_model = self.engine_model.clone();
 
@@ -324,7 +324,7 @@ impl Render for ChessBoardView {
         let move_list_panel_content = render_move_list_panel(&model, &self.move_list_state, cx);
 
         // Engine pane
-        let engine_pane_content = render_engine_pane(&engine_model, cx);
+        let engine_pane_content = render_engine_pane(&engine_model, window, cx);
 
         // Right panel with vertical split: move list (top) + engine (bottom)
         let right_panel_content = v_resizable("right-panel-layout")
