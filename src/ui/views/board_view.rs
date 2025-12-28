@@ -4,18 +4,18 @@ use gpui::{
     Action, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
 };
-use gpui_component::resizable::{h_resizable, resizable_panel};
+use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use std::collections::HashSet;
 
 use crate::domain::MoveNodeId;
-use crate::models::GameModel;
+use crate::models::{EngineModel, GameModel};
 use crate::ui::BoardLayout;
 use crate::ui::assets::piece_svg_path;
 use crate::ui::theme::{
     BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL, PANEL_BG,
 };
 use crate::ui::view_models::DragState;
-use crate::ui::views::render_move_list_panel;
+use crate::ui::views::{render_engine_pane, render_move_list_panel};
 
 // Define navigation actions
 actions!(chess, [MoveBack, MoveForward, MoveToStart, MoveToEnd]);
@@ -84,6 +84,7 @@ impl MoveListState {
 /// The main chess board view that observes a GameModel
 pub struct ChessBoardView {
     model: Entity<GameModel>,
+    engine_model: Entity<EngineModel>,
     pub view_state: BoardViewState,
     layout_state: Entity<BoardLayoutState>,
     move_list_state: Entity<MoveListState>,
@@ -91,17 +92,35 @@ pub struct ChessBoardView {
     _subscription: Subscription,
     _layout_subscription: Subscription,
     _move_list_subscription: Subscription,
+    _engine_subscription: Subscription,
 }
 
 impl ChessBoardView {
     pub fn new(model: Entity<GameModel>, cx: &mut Context<Self>) -> Self {
-        let _subscription = cx.observe(&model, |_, _, cx| cx.notify());
+        let _subscription = cx.observe(&model, |this, _, cx| {
+            // When game position changes, update engine analysis if running
+            this.update_engine_position(cx);
+            cx.notify();
+        });
         let layout_state = cx.new(|_| BoardLayoutState::new());
         let _layout_subscription = cx.observe(&layout_state, |_, _, cx| cx.notify());
         let move_list_state = cx.new(|_| MoveListState::new());
         let _move_list_subscription = cx.observe(&move_list_state, |_, _, cx| cx.notify());
+        let engine_model = cx.new(|_| EngineModel::new());
+        // Observe engine model to:
+        // 1. Re-render when analysis updates
+        // 2. Start analysis when engine becomes ready (but only if position changed)
+        let _engine_subscription = cx.observe(&engine_model, |this, _, cx| {
+            // Check if we need to start analysis (engine running but position not sent yet)
+            this.update_engine_position(cx);
+            cx.notify();
+        });
+
+
+
         Self {
             model,
+            engine_model,
             view_state: BoardViewState::new(),
             layout_state,
             move_list_state,
@@ -109,6 +128,32 @@ impl ChessBoardView {
             _subscription,
             _layout_subscription,
             _move_list_subscription,
+            _engine_subscription,
+        }
+    }
+
+    /// Update engine analysis with current position (if engine is running)
+    fn update_engine_position(&mut self, cx: &mut Context<Self>) {
+        use shakmaty::fen::Fen;
+        use shakmaty::EnPassantMode;
+        
+        let (is_running, current_engine_fen) = {
+            let engine = self.engine_model.read(cx);
+            (engine.is_running(), engine.current_fen().map(|s| s.to_string()))
+        };
+        
+        if !is_running {
+            return;
+        }
+        
+        let game = self.model.read(cx);
+        let game_fen = Fen::from_position(game.current_position(), EnPassantMode::Legal).to_string();
+        
+        // Only start analysis if the position changed or we're not analyzing yet
+        if current_engine_fen.as_deref() != Some(&game_fen) {
+            self.engine_model.update(cx, |engine, _| {
+                engine.start_analysis(&game_fen);
+            });
         }
     }
 }
@@ -116,6 +161,7 @@ impl ChessBoardView {
 impl Render for ChessBoardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.clone();
+        let engine_model = self.engine_model.clone();
 
         let game = self.model.read(cx);
         let drag_state = self.view_state.drag_state;
@@ -238,8 +284,10 @@ impl Render for ChessBoardView {
                         if let Some((to_row, to_col)) =
                             layout.pos_to_square(pos.x.into(), pos.y.into())
                         {
-                            view.model.update(cx, |game, _cx| {
-                                game.try_move((drag.from_row, drag.from_col), (to_row, to_col));
+                            view.model.update(cx, |game, cx| {
+                                if game.try_move((drag.from_row, drag.from_col), (to_row, to_col)) {
+                                    cx.notify(); // Notify that model changed
+                                }
                             });
                         }
                         cx.notify();
@@ -274,6 +322,24 @@ impl Render for ChessBoardView {
 
         // Move list panel
         let move_list_panel_content = render_move_list_panel(&model, &self.move_list_state, cx);
+
+        // Engine pane
+        let engine_pane_content = render_engine_pane(&engine_model, cx);
+
+        // Right panel with vertical split: move list (top) + engine (bottom)
+        let right_panel_content = v_resizable("right-panel-layout")
+            .child(
+                resizable_panel()
+                    .size(px(300.))
+                    .size_range(px(150.)..Pixels::MAX)
+                    .child(move_list_panel_content),
+            )
+            .child(
+                resizable_panel()
+                    .size(px(200.))
+                    .size_range(px(100.)..Pixels::MAX)
+                    .child(engine_pane_content),
+            );
 
         // Clone model for each action handler
         let model_back = model.clone();
@@ -342,7 +408,7 @@ impl Render for ChessBoardView {
                     .child(
                         resizable_panel()
                             .size_range(px(150.)..Pixels::MAX)
-                            .child(move_list_panel_content),
+                            .child(right_panel_content),
                     ),
             )
     }
