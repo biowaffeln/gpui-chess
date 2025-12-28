@@ -2,8 +2,9 @@
 
 use gpui::{
     Action, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px, rgb,
+    MouseUpEvent, Pixels, Subscription, Window, actions, canvas, div, img, prelude::*, px,
 };
+use gpui_component::ActiveTheme;
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use std::collections::HashSet;
 
@@ -11,9 +12,7 @@ use crate::domain::MoveNodeId;
 use crate::models::{EngineModel, GameModel};
 use crate::ui::BoardLayout;
 use crate::ui::assets::piece_svg_path;
-use crate::ui::theme::{
-    BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL, PANEL_BG,
-};
+use crate::ui::theme::{BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL};
 use crate::ui::view_models::DragState;
 use crate::ui::views::{render_engine_pane, render_move_list_panel};
 
@@ -116,8 +115,6 @@ impl ChessBoardView {
             cx.notify();
         });
 
-
-
         Self {
             model,
             engine_model,
@@ -134,21 +131,25 @@ impl ChessBoardView {
 
     /// Update engine analysis with current position (if engine is running)
     fn update_engine_position(&mut self, cx: &mut Context<Self>) {
-        use shakmaty::fen::Fen;
         use shakmaty::EnPassantMode;
-        
+        use shakmaty::fen::Fen;
+
         let (is_running, current_engine_fen) = {
             let engine = self.engine_model.read(cx);
-            (engine.is_running(), engine.current_fen().map(|s| s.to_string()))
+            (
+                engine.is_running(),
+                engine.current_fen().map(|s| s.to_string()),
+            )
         };
-        
+
         if !is_running {
             return;
         }
-        
+
         let game = self.model.read(cx);
-        let game_fen = Fen::from_position(game.current_position(), EnPassantMode::Legal).to_string();
-        
+        let game_fen =
+            Fen::from_position(game.current_position(), EnPassantMode::Legal).to_string();
+
         // Only start analysis if the position changed or we're not analyzing yet
         if current_engine_fen.as_deref() != Some(&game_fen) {
             self.engine_model.update(cx, |engine, _| {
@@ -232,12 +233,14 @@ impl Render for ChessBoardView {
             .child(board_bg)
             .children(piece_elements);
 
+        let bg = cx.theme().background;
+
         let board_panel_content = div()
             .id("board-panel")
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(PANEL_BG))
+            .bg(bg)
             .p(px(BOARD_PADDING))
             .child(board)
             .when_some(floating_piece, |el, fp| el.child(fp))

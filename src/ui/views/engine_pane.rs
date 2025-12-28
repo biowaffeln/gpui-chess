@@ -1,26 +1,17 @@
 //! Engine analysis pane - displays UCI engine output with start/stop control.
 
-use gpui::{App, Corner, Entity, SharedString, Window, div, prelude::*, px, rgb};
+use gpui::{App, Corner, Entity, Hsla, SharedString, Window, div, prelude::*, px};
 
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_component::{IconName, Sizable};
+use gpui_component::{ActiveTheme, IconName, Sizable};
 
 use crate::domain::uci::{Score, UciInfo};
 use crate::models::EngineModel;
-use crate::ui::theme::{
-    BOARD_PADDING, BORDER_COLOR, MOVE_LIST_BG, PANEL_BG, TEXT_PRIMARY, TEXT_SECONDARY,
-};
+use crate::ui::theme::BOARD_PADDING;
 
 /// Available thread count options
 const THREAD_OPTIONS: &[u32] = &[1, 2, 4, 6, 8];
-
-// Colors for evaluation display
-const EVAL_POSITIVE: u32 = 0x4ade80; // green - white advantage
-const EVAL_NEGATIVE: u32 = 0xf87171; // red - black advantage  
-const EVAL_NEUTRAL: u32 = 0xa1a1aa; // gray - equal
-#[allow(dead_code)] // Reserved for mate display
-const EVAL_MATE: u32 = 0xfbbf24; // yellow/gold - mate
 
 /// Render the engine analysis pane.
 /// Shows parsed analysis (eval, depth, PV) and raw output below.
@@ -37,6 +28,14 @@ pub fn render_engine_pane(
     let multi_pv = engine.multi_pv();
     let threads = engine.threads();
     let show_uci_output = engine.show_uci_output();
+
+    // Theme colors
+    let theme = cx.theme();
+    let bg = theme.background;
+    let secondary_bg = theme.secondary;
+    let border = theme.border;
+    let fg = theme.foreground;
+    let muted_fg = theme.muted_foreground;
 
     // Start/Stop button
     let engine_model_clone = engine_model.clone();
@@ -67,17 +66,17 @@ pub fn render_engine_pane(
     };
 
     // MultiPV dropdown
-    let lines_control = render_lines_control(engine_model, multi_pv);
+    let lines_control = render_lines_control(engine_model, multi_pv, muted_fg);
 
     // Threads dropdown
-    let threads_control = render_threads_control(engine_model, threads);
+    let threads_control = render_threads_control(engine_model, threads, muted_fg);
 
     // Get depth and nps from first analysis line for header display
     let header_depth = analysis_lines.first().and_then(|info| info.depth);
     let header_nps = analysis_lines.first().and_then(|info| info.nps);
 
     // Build the analysis display section
-    let analysis_section = render_analysis_section(&analysis_lines, black_to_move, is_running);
+    let analysis_section = render_analysis_section(&analysis_lines, black_to_move, is_running, cx);
 
     // Raw output toggle button
     let engine_model_raw = engine_model.clone();
@@ -85,7 +84,6 @@ pub fn render_engine_pane(
         .label("UCI")
         .ghost()
         .xsmall()
-        .text_color(rgb(TEXT_SECONDARY))
         .on_click(move |_, _, cx| {
             engine_model_raw.update(cx, |engine, cx| {
                 engine.toggle_uci_output();
@@ -95,7 +93,7 @@ pub fn render_engine_pane(
 
     // Build the raw output section (only if visible)
     let uci_output_section = if show_uci_output {
-        Some(render_uci_output_section(output_lines))
+        Some(render_uci_output_section(output_lines, muted_fg, border))
     } else {
         None
     };
@@ -104,9 +102,9 @@ pub fn render_engine_pane(
         .min_h_0()
         .flex()
         .flex_col()
-        .bg(rgb(MOVE_LIST_BG))
+        .bg(secondary_bg)
         .border_1()
-        .border_color(rgb(BORDER_COLOR))
+        .border_color(border)
         .rounded_md()
         .overflow_hidden()
         // Header with title and controls
@@ -119,7 +117,7 @@ pub fn render_engine_pane(
                 .px_4()
                 .py_2()
                 .border_b_1()
-                .border_color(rgb(BORDER_COLOR))
+                .border_color(border)
                 .child(
                     div()
                         .flex()
@@ -127,7 +125,7 @@ pub fn render_engine_pane(
                         .gap_2()
                         .child(
                             div()
-                                .text_color(rgb(TEXT_PRIMARY))
+                                .text_color(fg)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child("Stockfish"),
                         )
@@ -135,7 +133,7 @@ pub fn render_engine_pane(
                             el.child(
                                 div()
                                     .text_xs()
-                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .text_color(muted_fg)
                                     .child(format!("depth {}", depth)),
                             )
                         })
@@ -143,7 +141,7 @@ pub fn render_engine_pane(
                             el.child(
                                 div()
                                     .text_xs()
-                                    .text_color(rgb(TEXT_SECONDARY))
+                                    .text_color(muted_fg)
                                     .child(format!("{}", format_nps(nps))),
                             )
                         }),
@@ -168,7 +166,7 @@ pub fn render_engine_pane(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .bg(rgb(PANEL_BG))
+        .bg(bg)
         .p(px(BOARD_PADDING))
         .child(engine_pane)
 }
@@ -177,6 +175,7 @@ pub fn render_engine_pane(
 fn render_lines_control(
     engine_model: &Entity<EngineModel>,
     current_lines: u32,
+    muted_fg: Hsla,
 ) -> impl IntoElement {
     let engine_model = engine_model.clone();
 
@@ -184,12 +183,7 @@ fn render_lines_control(
         .flex()
         .items_center()
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(TEXT_SECONDARY))
-                .child("Lines"),
-        )
+        .child(div().text_xs().text_color(muted_fg).child("Lines"))
         .child(
             Button::new("lines-dropdown")
                 .ghost()
@@ -231,6 +225,7 @@ fn render_lines_control(
 fn render_threads_control(
     engine_model: &Entity<EngineModel>,
     current_threads: u32,
+    muted_fg: Hsla,
 ) -> impl IntoElement {
     let engine_model = engine_model.clone();
 
@@ -238,12 +233,7 @@ fn render_threads_control(
         .flex()
         .items_center()
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(TEXT_SECONDARY))
-                .child("Cores"),
-        )
+        .child(div().text_xs().text_color(muted_fg).child("Cores"))
         .child(
             Button::new("threads-dropdown")
                 .ghost()
@@ -286,23 +276,41 @@ fn render_analysis_section(
     analysis_lines: &[&UciInfo],
     black_to_move: bool,
     is_running: bool,
+    cx: &App,
 ) -> impl IntoElement {
+    let theme = cx.theme();
+    let muted_fg = theme.muted_foreground;
+    let fg = theme.foreground;
+    let border = theme.border;
+    let green = theme.green;
+    let red = theme.red;
+
     let content = if !analysis_lines.is_empty() {
         // Show all analysis lines
-        div().flex().flex_col().gap_2().children(
-            analysis_lines
-                .iter()
-                .enumerate()
-                .map(|(i, info)| render_pv_line(info, i == 0, black_to_move)),
-        )
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(analysis_lines.iter().enumerate().map(|(i, info)| {
+                render_pv_line(
+                    info,
+                    i == 0,
+                    black_to_move,
+                    fg,
+                    muted_fg,
+                    border,
+                    green,
+                    red,
+                )
+            }))
     } else if is_running {
         div()
-            .text_color(rgb(TEXT_SECONDARY))
+            .text_color(muted_fg)
             .text_sm()
             .child("Waiting for analysis...")
     } else {
         div()
-            .text_color(rgb(TEXT_SECONDARY))
+            .text_color(muted_fg)
             .text_sm()
             .child("Start engine to analyze position")
     };
@@ -311,8 +319,19 @@ fn render_analysis_section(
 }
 
 /// Render a single PV line
-fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::Div {
-    let (eval_text, eval_color) = format_evaluation(info.score, black_to_move);
+#[allow(clippy::too_many_arguments)]
+fn render_pv_line(
+    info: &UciInfo,
+    is_best: bool,
+    black_to_move: bool,
+    fg: Hsla,
+    muted_fg: Hsla,
+    border: Hsla,
+    green: Hsla,
+    red: Hsla,
+) -> gpui::Div {
+    let (eval_text, eval_color) =
+        format_evaluation(info.score, black_to_move, muted_fg, green, red);
     let pv_text = if info.pv_san.is_empty() {
         "...".to_string()
     } else {
@@ -331,7 +350,7 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
                     .w(px(60.))
                     .text_sm()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(eval_color))
+                    .text_color(eval_color)
                     .child(eval_text),
             )
             // PV
@@ -339,7 +358,7 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
                 div()
                     .flex_1()
                     .text_sm()
-                    .text_color(rgb(TEXT_PRIMARY))
+                    .text_color(fg)
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(pv_text),
@@ -352,14 +371,14 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
             .gap_2()
             .pt_1()
             .border_t_1()
-            .border_color(rgb(BORDER_COLOR))
+            .border_color(border)
             // Eval
             .child(
                 div()
                     .w(px(60.))
                     .text_sm()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(eval_color))
+                    .text_color(eval_color)
                     .child(eval_text),
             )
             // PV
@@ -367,7 +386,7 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
                 div()
                     .flex_1()
                     .text_sm()
-                    .text_color(rgb(TEXT_PRIMARY))
+                    .text_color(fg)
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(pv_text),
@@ -376,10 +395,14 @@ fn render_pv_line(info: &UciInfo, is_best: bool, black_to_move: bool) -> gpui::D
 }
 
 /// Render the raw output section
-fn render_uci_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> impl IntoElement {
+fn render_uci_output_section(
+    output_lines: &[crate::domain::uci::UciOutput],
+    muted_fg: Hsla,
+    border: Hsla,
+) -> impl IntoElement {
     let content = if output_lines.is_empty() {
         div()
-            .text_color(rgb(TEXT_SECONDARY))
+            .text_color(muted_fg)
             .text_xs()
             .child("No output yet...")
     } else {
@@ -393,7 +416,7 @@ fn render_uci_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> 
                 div()
                     .id(SharedString::from(format!("engine-line-{}", i)))
                     .text_xs()
-                    .text_color(rgb(TEXT_SECONDARY))
+                    .text_color(muted_fg)
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(line.raw.clone())
@@ -407,7 +430,7 @@ fn render_uci_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> 
         .flex_col()
         .overflow_hidden()
         .border_t_1()
-        .border_color(rgb(BORDER_COLOR))
+        .border_color(border)
         .child(
             div()
                 .id("engine-raw-output-scroll")
@@ -421,7 +444,13 @@ fn render_uci_output_section(output_lines: &[crate::domain::uci::UciOutput]) -> 
 }
 
 /// Format the evaluation score for display (always from white's perspective)
-fn format_evaluation(score: Option<Score>, black_to_move: bool) -> (String, u32) {
+fn format_evaluation(
+    score: Option<Score>,
+    black_to_move: bool,
+    neutral: Hsla,
+    positive: Hsla,
+    negative: Hsla,
+) -> (String, Hsla) {
     match score {
         Some(Score::Centipawns(cp)) => {
             // Flip sign if it's black's turn (engine gives score from side-to-move perspective)
@@ -433,11 +462,11 @@ fn format_evaluation(score: Option<Score>, black_to_move: bool) -> (String, u32)
                 format!("{:.2}", pawns)
             };
             let color = if white_cp > 50 {
-                EVAL_POSITIVE
+                positive
             } else if white_cp < -50 {
-                EVAL_NEGATIVE
+                negative
             } else {
-                EVAL_NEUTRAL
+                neutral
             };
             (text, color)
         }
@@ -450,14 +479,10 @@ fn format_evaluation(score: Option<Score>, black_to_move: bool) -> (String, u32)
                 format!("-M{}", white_mate.abs())
             };
             // Color based on who's winning
-            let color = if white_mate > 0 {
-                EVAL_POSITIVE
-            } else {
-                EVAL_NEGATIVE
-            };
+            let color = if white_mate > 0 { positive } else { negative };
             (text, color)
         }
-        None => ("--".to_string(), EVAL_NEUTRAL),
+        None => ("--".to_string(), neutral),
     }
 }
 

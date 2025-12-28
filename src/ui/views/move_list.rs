@@ -4,9 +4,10 @@
 
 use std::mem;
 
-use gpui::{AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*, px, rgb};
-use gpui_component::Icon;
+use gpui::{AnyElement, App, Div, Entity, Hsla, SharedString, Window, div, prelude::*, px};
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Disableable};
 
 use super::board_view::MoveListState;
 use super::{
@@ -15,19 +16,23 @@ use super::{
 use crate::domain::MoveNodeId;
 use crate::models::GameModel;
 use crate::ui::display::{get_sibling_sub_variations, get_sibling_variations, main_line_display};
-use crate::ui::theme::{
-    BOARD_PADDING, BORDER_COLOR, MOVE_LIST_BG, PANEL_BG, TEXT_PRIMARY, TEXT_SECONDARY,
-};
+use crate::ui::icons::ChessIcon;
+use crate::ui::theme::BOARD_PADDING;
 use crate::ui::view_models::{MainLineMoveDisplay, VariationDisplay};
 
-// Colors for move highlighting
-const MOVE_HOVER_BG: u32 = 0x3a3a3a;
-const MOVE_SELECTED_BG: u32 = 0x4a6da7;
-const NAV_BUTTON_BG: u32 = 0x3a3a3a;
-const NAV_BUTTON_HOVER_BG: u32 = 0x4a4a4a;
-const NAV_BUTTON_DISABLED: u32 = 0x555555;
-const VARIATION_BG: u32 = 0x252525;
-const VARIATION_BORDER: u32 = 0x3a3a3a;
+/// Theme colors for the move list, extracted from gpui-component theme
+#[derive(Clone, Copy)]
+struct MoveListColors {
+    bg: Hsla,
+    secondary_bg: Hsla,
+    border: Hsla,
+    fg: Hsla,
+    muted_fg: Hsla,
+    primary: Hsla,
+    primary_fg: Hsla,
+    accent: Hsla,
+    muted: Hsla,
+}
 
 /// Render the move list panel for a given game model.
 /// Returns a Div element that can be used as a child.
@@ -44,11 +49,23 @@ pub fn render_move_list_panel(
 
     let collapsed_variations = &move_list_state.read(cx).collapsed_variations;
 
-    // Note: navigation is handled via actions (see MoveBack, MoveForward, etc.)
+    // Extract theme colors
+    let theme = cx.theme();
+    let colors = MoveListColors {
+        bg: theme.background,
+        secondary_bg: theme.secondary,
+        border: theme.border,
+        fg: theme.foreground,
+        muted_fg: theme.muted_foreground,
+        primary: theme.primary,
+        primary_fg: theme.primary_foreground,
+        accent: theme.accent,
+        muted: theme.muted,
+    };
 
     // Build the move content
     let moves_content = if main_line.is_empty() {
-        div().text_color(rgb(TEXT_SECONDARY)).child("No moves yet")
+        div().text_color(colors.muted_fg).child("No moves yet")
     } else {
         render_main_line_with_variations(
             model,
@@ -57,6 +74,7 @@ pub fn render_move_list_panel(
             current_node_id,
             game,
             collapsed_variations,
+            colors,
         )
     };
 
@@ -64,18 +82,18 @@ pub fn render_move_list_panel(
         .flex_1()
         .flex()
         .flex_col()
-        .bg(rgb(MOVE_LIST_BG))
+        .bg(colors.secondary_bg)
         .border_1()
-        .border_color(rgb(BORDER_COLOR))
+        .border_color(colors.border)
         .rounded_md()
         // Header (fixed)
         .child(
             div()
                 .p_4()
                 .pb_2()
-                .text_color(rgb(TEXT_PRIMARY))
+                .text_color(colors.fg)
                 .border_b_1()
-                .border_color(rgb(BORDER_COLOR))
+                .border_color(colors.border)
                 .child("Move History"),
         )
         // Scrollable moves content
@@ -97,28 +115,28 @@ pub fn render_move_list_panel(
                 .gap_2()
                 .p_3()
                 .border_t_1()
-                .border_color(rgb(BORDER_COLOR))
+                .border_color(colors.border)
                 // Start button
                 .child(render_nav_button(
-                    "assets/caret-double-left.svg",
+                    ChessIcon::CaretDoubleLeft,
                     !is_at_root,
                     |window, cx| window.dispatch_action(Box::new(MoveToStart), cx),
                 ))
                 // Back button
                 .child(render_nav_button(
-                    "assets/caret-left.svg",
+                    ChessIcon::CaretLeft,
                     !is_at_root,
                     |window, cx| window.dispatch_action(Box::new(MoveBack), cx),
                 ))
                 // Forward button
                 .child(render_nav_button(
-                    "assets/caret-right.svg",
+                    ChessIcon::CaretRight,
                     !is_at_leaf,
                     |window, cx| window.dispatch_action(Box::new(MoveForward), cx),
                 ))
                 // End button
                 .child(render_nav_button(
-                    "assets/caret-double-right.svg",
+                    ChessIcon::CaretDoubleRight,
                     !is_at_leaf,
                     |window, cx| window.dispatch_action(Box::new(MoveToEnd), cx),
                 )),
@@ -128,7 +146,7 @@ pub fn render_move_list_panel(
         .size_full()
         .flex()
         .flex_col()
-        .bg(rgb(PANEL_BG))
+        .bg(colors.bg)
         .p(px(BOARD_PADDING))
         .child(move_list)
 }
@@ -142,6 +160,7 @@ fn render_main_line_with_variations(
     current_node_id: MoveNodeId,
     game: &GameModel,
     collapsed_variations: &std::collections::HashSet<MoveNodeId>,
+    colors: MoveListColors,
 ) -> Div {
     // Build segments: each segment is either inline moves or a variation block
     let mut segments: Vec<AnyElement> = Vec::new();
@@ -156,7 +175,7 @@ fn render_main_line_with_variations(
         if !mv.is_black {
             current_inline_moves.push(
                 div()
-                    .text_color(rgb(TEXT_SECONDARY))
+                    .text_color(colors.muted_fg)
                     .child(format!("{}.", mv.move_num))
                     .into_any_element(),
             );
@@ -172,6 +191,7 @@ fn render_main_line_with_variations(
                 mv.is_checkmate,
                 model_move,
                 0, // main line
+                colors,
             )
             .into_any_element(),
         );
@@ -182,7 +202,7 @@ fn render_main_line_with_variations(
 
             // Add collapse button after the move
             current_inline_moves.push(
-                render_collapse_button(node_id, is_collapsed, move_list_state.clone())
+                render_collapse_button(node_id, is_collapsed, move_list_state.clone(), colors)
                     .into_any_element(),
             );
 
@@ -211,6 +231,7 @@ fn render_main_line_with_variations(
                             game,
                             collapsed_variations,
                             1, // first level of variation
+                            colors,
                         )
                         .into_any_element(),
                     );
@@ -244,6 +265,7 @@ fn render_variations_block(
     game: &GameModel,
     collapsed_variations: &std::collections::HashSet<MoveNodeId>,
     variation_depth: usize,
+    colors: MoveListColors,
 ) -> Div {
     div()
         .flex()
@@ -261,11 +283,13 @@ fn render_variations_block(
                 game,
                 collapsed_variations,
                 variation_depth,
+                colors,
             )
         }))
 }
 
 /// Render a single variation line
+#[allow(clippy::too_many_arguments)]
 fn render_variation_line(
     model: &Entity<GameModel>,
     move_list_state: &Entity<MoveListState>,
@@ -274,6 +298,7 @@ fn render_variation_line(
     game: &GameModel,
     collapsed_variations: &std::collections::HashSet<MoveNodeId>,
     variation_depth: usize,
+    colors: MoveListColors,
 ) -> Div {
     // Build the content with proper segmentation for sub-variations
     let mut segments: Vec<AnyElement> = Vec::new();
@@ -293,7 +318,7 @@ fn render_variation_line(
             };
             current_inline.push(
                 div()
-                    .text_color(rgb(TEXT_SECONDARY))
+                    .text_color(colors.muted_fg)
                     .child(num_display)
                     .into_any_element(),
             );
@@ -308,6 +333,7 @@ fn render_variation_line(
                 mv.is_checkmate,
                 model_move,
                 variation_depth,
+                colors,
             )
             .into_any_element(),
         );
@@ -318,7 +344,7 @@ fn render_variation_line(
 
             // Add collapse button after the move
             current_inline.push(
-                render_collapse_button(node_id, is_collapsed, move_list_state.clone())
+                render_collapse_button(node_id, is_collapsed, move_list_state.clone(), colors)
                     .into_any_element(),
             );
 
@@ -347,6 +373,7 @@ fn render_variation_line(
                             game,
                             collapsed_variations,
                             variation_depth + 1, // nested deeper
+                            colors,
                         )
                         .into_any_element(),
                     );
@@ -374,15 +401,16 @@ fn render_variation_line(
         .gap_1()
         .px_3()
         .py_1()
-        .bg(rgb(VARIATION_BG))
+        .bg(colors.muted)
         .border_l_2()
-        .border_color(rgb(VARIATION_BORDER))
+        .border_color(colors.border)
         .rounded_r_sm()
         .children(segments)
 }
 
 /// Render a clickable move that navigates to a specific node
 /// variation_depth: 0 = main line, 1+ = inside a variation
+#[allow(clippy::too_many_arguments)]
 fn render_clickable_move_node(
     node_id: MoveNodeId,
     san: String,
@@ -391,6 +419,7 @@ fn render_clickable_move_node(
     is_checkmate: bool,
     model: Entity<GameModel>,
     variation_depth: usize,
+    colors: MoveListColors,
 ) -> impl IntoElement {
     // Build the display text with check/checkmate symbols
     let mut display_text = san;
@@ -405,10 +434,13 @@ fn render_clickable_move_node(
         .px_1()
         .rounded(px(3.0))
         .cursor_pointer()
-        .text_color(rgb(TEXT_PRIMARY))
         .overflow_hidden()
-        .when(is_selected, |el| el.bg(rgb(MOVE_SELECTED_BG)))
-        .when(!is_selected, |el| el.hover(|s| s.bg(rgb(MOVE_HOVER_BG))))
+        .when(is_selected, |el| {
+            el.bg(colors.primary).text_color(colors.primary_fg)
+        })
+        .when(!is_selected, |el| {
+            el.text_color(colors.fg).hover(|s| s.bg(colors.accent))
+        })
         .on_click({
             let model = model.clone();
             move |_ev, _window, cx| {
@@ -444,6 +476,7 @@ fn render_collapse_button(
     node_id: MoveNodeId,
     is_collapsed: bool,
     move_list_state: Entity<MoveListState>,
+    colors: MoveListColors,
 ) -> impl IntoElement {
     let symbol = if is_collapsed { "+" } else { "-" };
     div()
@@ -451,8 +484,8 @@ fn render_collapse_button(
         .px_1()
         .rounded(px(3.0))
         .cursor_pointer()
-        .text_color(rgb(TEXT_SECONDARY))
-        .hover(|s| s.bg(rgb(MOVE_HOVER_BG)))
+        .text_color(colors.muted_fg)
+        .hover(|s| s.bg(colors.accent))
         .on_click(move |_ev, _window, cx| {
             move_list_state.update(cx, |state, cx| {
                 state.toggle_variation(node_id);
@@ -462,33 +495,23 @@ fn render_collapse_button(
         .child(symbol)
 }
 
-/// Render a navigation button (back/forward)
+/// Render a navigation button (back/forward) using gpui-component Button
 fn render_nav_button(
-    icon_path: &'static str,
+    icon: ChessIcon,
     enabled: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let text_color = if enabled {
-        rgb(TEXT_PRIMARY)
+    if enabled {
+        Button::new(SharedString::from(format!("nav-{:?}", icon)))
+            .icon(icon)
+            .ghost()
+            .on_click(move |_ev, window, cx| {
+                on_click(window, cx);
+            })
     } else {
-        rgb(NAV_BUTTON_DISABLED)
-    };
-
-    div()
-        .id(SharedString::from(format!("nav-{icon_path}")))
-        .px_4()
-        .py_2()
-        .rounded(px(4.0))
-        .text_color(text_color)
-        .font_weight(gpui::FontWeight::BOLD)
-        .when(enabled, |el| {
-            el.bg(rgb(NAV_BUTTON_BG))
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(NAV_BUTTON_HOVER_BG)))
-                .on_click(move |_ev, window, cx| {
-                    on_click(window, cx);
-                })
-        })
-        .when(!enabled, |el| el.bg(rgb(0x2a2a2a)))
-        .child(Icon::empty().path(icon_path).text_color(text_color))
+        Button::new(SharedString::from(format!("nav-{:?}", icon)))
+            .icon(icon)
+            .ghost()
+            .disabled(true)
+    }
 }

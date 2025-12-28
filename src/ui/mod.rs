@@ -1,6 +1,7 @@
 pub mod assets;
 pub mod board_layout;
 pub mod display;
+pub mod icons;
 pub mod theme;
 pub mod view_models;
 pub mod views;
