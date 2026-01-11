@@ -1,5 +1,6 @@
 mod chess;
 mod move_tree;
+pub mod pgn;
 pub mod uci;
 
 pub use chess::*;

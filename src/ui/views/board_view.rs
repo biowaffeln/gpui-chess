@@ -9,12 +9,15 @@ use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use std::collections::HashSet;
 
 use crate::domain::MoveNodeId;
-use crate::models::{EngineModel, GameModel};
+use crate::models::{EngineModel, GameModel, PgnLibraryModel};
 use crate::ui::BoardLayout;
 use crate::ui::assets::piece_svg_path;
 use crate::ui::theme::{BOARD_CORNER_RADIUS, BOARD_PADDING, GHOST_OPACITY, INITIAL_LEFT_PANEL};
 use crate::ui::view_models::DragState;
-use crate::ui::views::{render_engine_pane, render_move_list_panel};
+use crate::ui::views::{render_engine_pane, render_pgn_panel, PgnPanelState, PgnTableDelegate};
+use gpui_component::table::TableState;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // Define navigation actions
 actions!(chess, [MoveBack, MoveForward, MoveToStart, MoveToEnd]);
@@ -87,11 +90,16 @@ pub struct ChessBoardView {
     pub view_state: BoardViewState,
     layout_state: Entity<BoardLayoutState>,
     move_list_state: Entity<MoveListState>,
+    pgn_panel_state: Entity<PgnPanelState>,
+    pgn_library: Entity<PgnLibraryModel>,
+    pgn_table_state: Rc<RefCell<Option<Entity<TableState<PgnTableDelegate>>>>>,
     focus_handle: FocusHandle,
     _subscription: Subscription,
     _layout_subscription: Subscription,
     _move_list_subscription: Subscription,
     _engine_subscription: Subscription,
+    _pgn_panel_subscription: Subscription,
+    _pgn_library_subscription: Subscription,
 }
 
 impl ChessBoardView {
@@ -115,17 +123,33 @@ impl ChessBoardView {
             cx.notify();
         });
 
+        // PGN panel state
+        let pgn_panel_state = cx.new(|_| PgnPanelState::new());
+        let _pgn_panel_subscription = cx.observe(&pgn_panel_state, |_, _, cx| cx.notify());
+
+        // PGN library
+        let pgn_library = cx.new(|_| PgnLibraryModel::new());
+        let _pgn_library_subscription = cx.observe(&pgn_library, |_, _, cx| cx.notify());
+
+        // Table state for PGN library - initialized lazily on first render since we need Window
+        let pgn_table_state = Rc::new(RefCell::new(None));
+
         Self {
             model,
             engine_model,
             view_state: BoardViewState::new(),
             layout_state,
             move_list_state,
+            pgn_panel_state,
+            pgn_library,
+            pgn_table_state,
             focus_handle: cx.focus_handle(),
             _subscription,
             _layout_subscription,
             _move_list_subscription,
             _engine_subscription,
+            _pgn_panel_subscription,
+            _pgn_library_subscription,
         }
     }
 
@@ -323,19 +347,40 @@ impl Render for ChessBoardView {
             .child(measure_canvas)
             .child(board_panel_content);
 
-        // Move list panel
-        let move_list_panel_content = render_move_list_panel(&model, &self.move_list_state, cx);
+        // Initialize table state lazily (needs window)
+        let table_state = {
+            let mut table_state_ref = self.pgn_table_state.borrow_mut();
+            if table_state_ref.is_none() {
+                let library = self.pgn_library.clone();
+                let game_model = self.model.clone();
+                *table_state_ref = Some(cx.new(|cx| {
+                    TableState::new(PgnTableDelegate::new(library, game_model), window, cx)
+                }));
+            }
+            table_state_ref.clone().unwrap()
+        };
+
+        // PGN panel (tabbed: Moves | Library)
+        let pgn_panel_content = render_pgn_panel(
+            &model,
+            &self.move_list_state,
+            &self.pgn_panel_state,
+            &self.pgn_library,
+            &table_state,
+            window,
+            cx,
+        );
 
         // Engine pane
         let engine_pane_content = render_engine_pane(&engine_model, window, cx);
 
-        // Right panel with vertical split: move list (top) + engine (bottom)
+        // Right panel with vertical split: pgn panel (top) + engine (bottom)
         let right_panel_content = v_resizable("right-panel-layout")
             .child(
                 resizable_panel()
                     .size(px(300.))
                     .size_range(px(150.)..Pixels::MAX)
-                    .child(move_list_panel_content),
+                    .child(pgn_panel_content),
             )
             .child(
                 resizable_panel()

@@ -3,7 +3,7 @@
 //! This model contains only pure game state and logic, with no UI concerns.
 
 use crate::domain::{MoveNodeId, MoveTree, Piece, PieceColor, shakmaty_to_piece, to_square};
-use shakmaty::san::San;
+use shakmaty::san::SanPlus;
 use shakmaty::{Chess, Color as SColor, File, Move, Position, Rank, Role};
 
 /// The main game model containing all chess game state
@@ -17,6 +17,17 @@ impl GameModel {
         Self {
             tree: MoveTree::new(),
         }
+    }
+
+    /// Load a game from a PgnGame, replacing the current game
+    pub fn load_pgn_game(&mut self, game: &crate::domain::pgn::PgnGame) {
+        self.tree = game.moves.clone();
+        self.tree.go_to_root();
+    }
+
+    /// Reset to a new empty game
+    pub fn reset(&mut self) {
+        self.tree = MoveTree::new();
     }
 
     /// Get the currently viewed position
@@ -122,11 +133,12 @@ impl GameModel {
                     _ => *m,
                 };
 
-                // Get SAN notation
-                let san = San::from_move(&position, move_to_play).to_string();
+                // Get SAN notation with check/checkmate suffix (also plays the move internally)
+                let san_plus = SanPlus::from_move(position, move_to_play);
+                let san = san_plus.to_string();
 
-                // Apply the move
-                let new_position = position.play(move_to_play).unwrap();
+                // Apply the move to get new position
+                let new_position = self.current_position().clone().play(move_to_play).unwrap();
 
                 // Add to tree (will navigate to existing or create new)
                 self.tree.add_move(new_position, san);

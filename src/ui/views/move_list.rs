@@ -34,49 +34,15 @@ struct MoveListColors {
     muted: Hsla,
 }
 
-/// Render the move list panel for a given game model.
+/// Render the move list panel for a given game model (standalone, with full container).
 /// Returns a Div element that can be used as a child.
 pub fn render_move_list_panel(
     model: &Entity<GameModel>,
     move_list_state: &Entity<MoveListState>,
     cx: &App,
 ) -> Div {
-    let game = model.read(cx);
-    let main_line = main_line_display(game);
-    let is_at_root = game.is_at_root();
-    let is_at_leaf = game.is_at_leaf();
-    let current_node_id = game.current_node_id();
-
-    let collapsed_variations = &move_list_state.read(cx).collapsed_variations;
-
-    // Extract theme colors
     let theme = cx.theme();
-    let colors = MoveListColors {
-        bg: theme.background,
-        secondary_bg: theme.secondary,
-        border: theme.border,
-        fg: theme.foreground,
-        muted_fg: theme.muted_foreground,
-        primary: theme.primary,
-        primary_fg: theme.primary_foreground,
-        accent: theme.accent,
-        muted: theme.muted,
-    };
-
-    // Build the move content
-    let moves_content = if main_line.is_empty() {
-        div().text_color(colors.muted_fg).child("No moves yet")
-    } else {
-        render_main_line_with_variations(
-            model,
-            move_list_state,
-            &main_line,
-            current_node_id,
-            game,
-            collapsed_variations,
-            colors,
-        )
-    };
+    let colors = extract_colors(cx);
 
     let move_list = div()
         .flex_1()
@@ -96,6 +62,53 @@ pub fn render_move_list_panel(
                 .border_color(colors.border)
                 .child("Move History"),
         )
+        // Content (scrollable moves + nav buttons)
+        .child(render_move_list_content(model, move_list_state, cx));
+
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(theme.background)
+        .p(px(BOARD_PADDING))
+        .child(move_list)
+}
+
+/// Render just the move list content (scrollable moves + nav buttons).
+/// Used by the tabbed PGN panel.
+pub fn render_move_list_content(
+    model: &Entity<GameModel>,
+    move_list_state: &Entity<MoveListState>,
+    cx: &App,
+) -> Div {
+    let game = model.read(cx);
+    let main_line = main_line_display(game);
+    let is_at_root = game.is_at_root();
+    let is_at_leaf = game.is_at_leaf();
+    let current_node_id = game.current_node_id();
+
+    let collapsed_variations = &move_list_state.read(cx).collapsed_variations;
+    let colors = extract_colors(cx);
+
+    // Build the move content
+    let moves_content = if main_line.is_empty() {
+        div().text_color(colors.muted_fg).child("No moves yet")
+    } else {
+        render_main_line_with_variations(
+            model,
+            move_list_state,
+            &main_line,
+            current_node_id,
+            game,
+            collapsed_variations,
+            colors,
+        )
+    };
+
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
         // Scrollable moves content
         .child(
             div()
@@ -140,15 +153,23 @@ pub fn render_move_list_panel(
                     !is_at_leaf,
                     |window, cx| window.dispatch_action(Box::new(MoveToEnd), cx),
                 )),
-        );
+        )
+}
 
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .bg(colors.bg)
-        .p(px(BOARD_PADDING))
-        .child(move_list)
+/// Extract theme colors for move list rendering
+fn extract_colors(cx: &App) -> MoveListColors {
+    let theme = cx.theme();
+    MoveListColors {
+        bg: theme.background,
+        secondary_bg: theme.secondary,
+        border: theme.border,
+        fg: theme.foreground,
+        muted_fg: theme.muted_foreground,
+        primary: theme.primary,
+        primary_fg: theme.primary_foreground,
+        accent: theme.accent,
+        muted: theme.muted,
+    }
 }
 
 /// Render the main line with inline variations
@@ -421,13 +442,9 @@ fn render_clickable_move_node(
     variation_depth: usize,
     colors: MoveListColors,
 ) -> impl IntoElement {
-    // Build the display text with check/checkmate symbols
-    let mut display_text = san;
-    if is_checkmate {
-        display_text.push('#');
-    } else if is_check {
-        display_text.push('+');
-    }
+    // SAN already includes +/# suffix (from SanPlus), just use as-is
+    let display_text = san;
+    let _ = (is_check, is_checkmate); // Silence unused warnings
 
     div()
         .id(SharedString::from(format!("move-node-{node_id}")))

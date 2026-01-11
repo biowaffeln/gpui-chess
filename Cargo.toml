@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 gpui = "0.2.2"
-shakmaty = "0.29.4"
+shakmaty = "0.30"
 anyhow = "1.0"
 gpui-component = "0.5.0"
 serde = { version = "1.0", features = ["derive"] }
 schemars = "1.1"
+pgn-reader = "0.29"
